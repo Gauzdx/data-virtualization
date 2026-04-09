@@ -3,7 +3,15 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  height: calc(100vh - 100px); /* leave room for app header */
+  height: calc(100vh - 100px);
+}
+
+/* ── Toolbar (badge + error bar) ────────────────────────────────────────────── */
+.vg-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 22px;
 }
 
 .vg-badge {
@@ -11,6 +19,37 @@
   color: #64748b;
   font-weight: 500;
   letter-spacing: 0.01em;
+}
+
+.vg-save-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #dc2626;
+  font-size: 12px;
+  font-weight: 500;
+  animation: vg-fadein 0.15s ease;
+}
+
+.vg-save-error-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #dc2626;
+  font-size: 12px;
+  padding: 0 2px;
+  line-height: 1;
+  opacity: 0.7;
+}
+.vg-save-error-close:hover { opacity: 1; }
+
+@keyframes vg-fadein {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 /* ── Inner wrapper (measured by ResizeObserver) ───────────────────────────── */
@@ -27,10 +66,9 @@
 .vg-header {
   display: flex;
   flex-direction: row;
-  overflow: hidden;             /* hides the header's own scrollbar */
+  overflow: hidden;
   background: #1e293b;
   border-bottom: 2px solid #0f172a;
-  /* no border-radius here — wrapper clips it */
 }
 
 .vg-header-cell {
@@ -52,33 +90,56 @@
   cursor: default;
   transition: background 0.15s;
 }
+.vg-header-cell:hover { background: #334155; }
 
-.vg-header-cell:hover {
-  background: #334155;
+/* ── Data cells ───────────────────────────────────────────────────────────── */
+.vg-data-cell {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border-right: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+  background-color: #ffffff;
+  font-size: 13px;
+  font-family: 'Menlo', 'Consolas', monospace;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  box-sizing: border-box;
+  color: #374151;
+  cursor: cell;
+  user-select: text;
+  transition: background 0.1s;
+}
+.vg-data-cell--odd           { background-color: #f8fafc; }
+.vg-data-cell:hover          { background-color: #eff6ff !important; }
+
+.vg-cell-loading   { color: #94a3b8; font-size: 11px; }
+.vg-cell-empty     { color: #cbd5e1; font-style: italic; font-size: 11px; }
+.vg-cell-placeholder { color: #cbd5e1; }
+
+/* ── Inline edit input ────────────────────────────────────────────────────── */
+.vg-cell-input {
+  width: 100%;
+  height: 100%;
+  padding: 0 8px;
+  border: 2px solid #3b82f6;
+  border-radius: 0;
+  outline: none;
+  font-size: 13px;
+  font-family: 'Menlo', 'Consolas', monospace;
+  background: #eff6ff;
+  color: #1e293b;
+  box-sizing: border-box;
+  /* Inset shadow to make the focus ring visible inside the cell */
+  box-shadow: inset 0 0 0 1px #93c5fd;
 }
 
 /* ── react-window grid ────────────────────────────────────────────────────── */
-/* The grid element already has overflow:auto from react-window.
-   We style its scrollbars here for a polished look. */
-.vg-grid {
-  outline: none;
-}
+.vg-grid { outline: none; }
 
-.vg-grid::-webkit-scrollbar {
-  width: 12px;
-  height: 12px;
-}
-.vg-grid::-webkit-scrollbar-track {
-  background: #f8fafc;
-}
-.vg-grid::-webkit-scrollbar-thumb {
-  background: #94a3b8;
-  border-radius: 6px;
-  border: 3px solid #f8fafc;
-}
-.vg-grid::-webkit-scrollbar-thumb:hover {
-  background: #475569;
-}
-.vg-grid::-webkit-scrollbar-corner {
-  background: #f8fafc;
-}
+.vg-grid::-webkit-scrollbar         { width: 12px; height: 12px; }
+.vg-grid::-webkit-scrollbar-track   { background: #f8fafc; }
+.vg-grid::-webkit-scrollbar-thumb   { background: #94a3b8; border-radius: 6px; border: 3px solid #f8fafc; }
+.vg-grid::-webkit-scrollbar-thumb:hover { background: #475569; }
+.vg-grid::-webkit-scrollbar-corner  { background: #f8fafc; }

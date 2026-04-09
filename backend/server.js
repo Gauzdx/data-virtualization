@@ -65,15 +65,47 @@ app.get('/api/data', async (req, res) => {
     const colList   = selectedColumns.map((c) => `"${c}"`).join(', ');
     const rowLimit  = rowEnd - rowStart + 1;
 
-    // Use ctid for a stable physical row order (no primary key assumed)
     const result = await pool.query(
-      `SELECT ${colList} FROM ttm_random_data ORDER BY ctid LIMIT $1 OFFSET $2`,
+      `SELECT ${colList} FROM ttm_random_data ORDER BY "ID" LIMIT $1 OFFSET $2`,
       [rowLimit, rowStart]
     );
 
     res.json({ rows: result.rows, columns: selectedColumns });
   } catch (err) {
     console.error('[data]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/cell  →  update a single cell value
+// Body: { rowIndex: number, column: string, value: string | null }
+app.put('/api/cell', async (req, res) => {
+  try {
+    const { rowIndex, column, value } = req.body;
+
+    if (typeof rowIndex !== 'number' || !column) {
+      return res.status(400).json({ error: 'rowIndex (number) and column (string) are required' });
+    }
+
+    const allColumns = await getColumns();
+    if (!allColumns.includes(column)) {
+      return res.status(400).json({ error: `Unknown column: ${column}` });
+    }
+
+    // Look up the ID at the given display position (ORDER BY "ID" matches the
+    // fetch query), then update directly by PK.
+    await pool.query(
+      `UPDATE ttm_random_data
+       SET    "${column}" = $1
+       WHERE  "ID" = (
+         SELECT "ID" FROM ttm_random_data ORDER BY "ID" LIMIT 1 OFFSET $2
+       )`,
+      [value, rowIndex]
+    );
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[cell update]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

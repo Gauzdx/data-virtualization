@@ -11,60 +11,73 @@ import { FixedSizeGrid } from 'react-window';
 import './VirtualGrid.css';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-const COLUMN_WIDTH = 150;   // px per column
-const ROW_HEIGHT   = 36;    // px per data row
-const HEADER_HEIGHT = 42;   // px for the sticky header strip
+const COLUMN_WIDTH  = 150;
+const ROW_HEIGHT    = 36;
+const HEADER_HEIGHT = 42;
+const CHUNK_ROWS    = 100;
+const CHUNK_COLS    = 30;
 
-// Data is fetched in chunks so we batch many cells into one network request.
-// Adjust these to tune the trade-off between network calls and over-fetching.
-const CHUNK_ROWS = 100;
-const CHUNK_COLS = 30;
-
-// ─── Cell (defined outside VirtualGrid so react-window never recreates it) ───
-/**
- * itemData shape: { cacheRef, loadingChunksRef, version }
- *
- * `version` is incremented every time cacheRef is updated, which causes
- * React.memo to let the cell re-render and pick up new values.
- */
+// ─── Cell ─────────────────────────────────────────────────────────────────────
+// Defined outside VirtualGrid so react-window always gets the same component
+// reference and never forcibly unmounts/remounts every visible cell.
+//
+// itemData shape:
+//   { cacheRef, loadingChunksRef, version,
+//     editingCell: {rowIndex,colIndex}|null,
+//     onStartEdit: (rowIndex, colIndex) => void,
+//     onCommit:    (rowIndex, colIndex, value: string) => void,
+//     onCancel:    () => void }
 const Cell = memo(({ columnIndex, rowIndex, style, data }) => {
-  const { cacheRef, loadingChunksRef } = data;
+  const { cacheRef, loadingChunksRef, editingCell, onStartEdit, onCommit, onCancel } = data;
 
-  const chunkKey = `${Math.floor(rowIndex / CHUNK_ROWS)}_${Math.floor(columnIndex / CHUNK_COLS)}`;
-  const cellKey  = `${rowIndex}_${columnIndex}`;
-
+  const isEditing = editingCell?.rowIndex === rowIndex && editingCell?.colIndex === columnIndex;
+  const chunkKey  = `${Math.floor(rowIndex / CHUNK_ROWS)}_${Math.floor(columnIndex / CHUNK_COLS)}`;
+  const cellKey   = `${rowIndex}_${columnIndex}`;
   const value     = cacheRef.current.get(cellKey);
   const isLoading = loadingChunksRef.current.has(chunkKey);
   const isEven    = rowIndex % 2 === 0;
 
+  // ── Editing mode ────────────────────────────────────────────────────────────
+  if (isEditing) {
+    // Uncontrolled input — we read its value from the DOM on commit/cancel.
+    // This avoids re-rendering the entire grid on every keystroke.
+    const handleKeyDown = (e) => {
+      if (e.key === 'Enter')  { e.preventDefault(); onCommit(rowIndex, columnIndex, e.target.value); }
+      if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+    };
+    const handleBlur = (e) => onCommit(rowIndex, columnIndex, e.target.value);
+
+    return (
+      <div style={{ ...style, padding: 0, boxSizing: 'border-box' }}>
+        <input
+          className="vg-cell-input"
+          // autoFocus causes the input to grab focus as soon as it mounts
+          // eslint-disable-next-line jsx-a11y/no-autofocus
+          autoFocus
+          defaultValue={value ?? ''}
+          onKeyDown={handleKeyDown}
+          onBlur={handleBlur}
+        />
+      </div>
+    );
+  }
+
+  // ── Display mode ─────────────────────────────────────────────────────────
   return (
     <div
-      style={{
-        ...style,
-        display: 'flex',
-        alignItems: 'center',
-        paddingLeft: 10,
-        paddingRight: 10,
-        borderRight: '1px solid #e2e8f0',
-        borderBottom: '1px solid #e2e8f0',
-        backgroundColor: isEven ? '#ffffff' : '#f8fafc',
-        fontSize: 13,
-        fontFamily: "'Menlo', 'Consolas', monospace",
-        overflow: 'hidden',
-        whiteSpace: 'nowrap',
-        textOverflow: 'ellipsis',
-        boxSizing: 'border-box',
-        color: '#374151',
-        userSelect: 'text',
-      }}
+      className={`vg-data-cell${isEven ? '' : ' vg-data-cell--odd'}`}
+      style={style}
       title={value !== undefined ? String(value) : undefined}
+      onDoubleClick={() => onStartEdit(rowIndex, columnIndex)}
     >
       {isLoading && value === undefined ? (
-        <span style={{ color: '#94a3b8', fontSize: 11 }}>loading…</span>
-      ) : value !== undefined ? (
+        <span className="vg-cell-loading">loading…</span>
+      ) : value !== undefined && value !== '' ? (
         String(value)
+      ) : value === '' ? (
+        <span className="vg-cell-empty">empty</span>
       ) : (
-        <span style={{ color: '#cbd5e1' }}>—</span>
+        <span className="vg-cell-placeholder">—</span>
       )}
     </div>
   );
@@ -74,24 +87,25 @@ Cell.displayName = 'Cell';
 
 // ─── VirtualGrid ─────────────────────────────────────────────────────────────
 export default function VirtualGrid({ columns, rowCount }) {
-  // Mutable cache — storing here avoids triggering React re-renders on every
-  // cell write. We bump `version` only after a whole chunk lands, causing a
-  // single re-render that refreshes all visible cells.
-  const cacheRef         = useRef(new Map()); // `${row}_${col}` → string value
-  const loadedChunksRef  = useRef(new Set()); // chunk keys already fetched
-  const loadingChunksRef = useRef(new Set()); // chunk keys currently in-flight
+  // ── Data cache (mutable, no re-render on write) ───────────────────────────
+  const cacheRef         = useRef(new Map()); // `${row}_${col}` → string
+  const loadedChunksRef  = useRef(new Set());
+  const loadingChunksRef = useRef(new Set());
   const [version, bump]  = useReducer((v) => v + 1, 0);
 
-  // Ref used to sync header scroll with grid scroll
-  const headerRef = useRef(null);
+  // ── Edit state ────────────────────────────────────────────────────────────
+  const [editingCell, setEditingCell] = useState(null); // { rowIndex, colIndex }
+  const [saveError,   setSaveError]   = useState(null);
+  // Guard against double-commit when both Enter (keydown) and blur fire
+  const commitLockRef = useRef(false);
 
-  // Measure the wrapper element so react-window gets real pixel dimensions
-  const wrapperRef                        = useRef(null);
-  const [wrapperSize, setWrapperSize]     = useState({ width: 0, height: 0 });
+  // ── Layout ────────────────────────────────────────────────────────────────
+  const headerRef                      = useRef(null);
+  const wrapperRef                     = useRef(null);
+  const [wrapperSize, setWrapperSize]  = useState({ width: 0, height: 0 });
 
   useEffect(() => {
     if (!wrapperRef.current) return;
-
     const ro = new ResizeObserver((entries) => {
       const { width, height } = entries[0].contentRect;
       setWrapperSize({ width, height });
@@ -100,14 +114,14 @@ export default function VirtualGrid({ columns, rowCount }) {
     return () => ro.disconnect();
   }, []);
 
-  // ── Data fetching ──────────────────────────────────────────────────────────
+  // ── Data fetching ─────────────────────────────────────────────────────────
   const fetchChunk = useCallback(
     async (chunkRowIdx, chunkColIdx) => {
       const key = `${chunkRowIdx}_${chunkColIdx}`;
       if (loadedChunksRef.current.has(key) || loadingChunksRef.current.has(key)) return;
 
       loadingChunksRef.current.add(key);
-      bump(); // show "loading…" placeholders immediately
+      bump();
 
       const rowStart = chunkRowIdx * CHUNK_ROWS;
       const rowEnd   = Math.min(rowStart + CHUNK_ROWS - 1, rowCount - 1);
@@ -122,46 +136,86 @@ export default function VirtualGrid({ columns, rowCount }) {
         const { rows } = await res.json();
 
         rows.forEach((row, rowOffset) => {
-          // Object.values preserves the order returned by the server, which
-          // matches the column slice we requested.
-          Object.values(row).forEach((value, colOffset) => {
+          Object.values(row).forEach((val, colOffset) => {
             cacheRef.current.set(
               `${rowStart + rowOffset}_${colStart + colOffset}`,
-              value !== null && value !== undefined ? String(value) : ''
+              val !== null && val !== undefined ? String(val) : ''
             );
           });
         });
-
         loadedChunksRef.current.add(key);
       } catch (err) {
         console.error('[VirtualGrid] chunk fetch failed:', err.message);
-        // Remove from loading so it can be retried on next scroll
       } finally {
         loadingChunksRef.current.delete(key);
-        bump(); // re-render visible cells with fresh data
+        bump();
       }
     },
     [columns.length, rowCount]
   );
 
-  // ── react-window callbacks ─────────────────────────────────────────────────
+  // ── Editing callbacks ─────────────────────────────────────────────────────
+  const startEdit = useCallback((rowIndex, colIndex) => {
+    commitLockRef.current = false;
+    setSaveError(null);
+    setEditingCell({ rowIndex, colIndex });
+  }, []);
+
+  const cancelEdit = useCallback(() => {
+    commitLockRef.current = false;
+    setEditingCell(null);
+  }, []);
+
+  const commitEdit = useCallback(
+    async (rowIndex, colIndex, rawValue) => {
+      if (commitLockRef.current) return;
+      commitLockRef.current = true;
+
+      // Close the editor immediately for snappy UX
+      setEditingCell(null);
+
+      const column    = columns[colIndex];
+      const trimmed   = rawValue.trim();
+      const sendValue = trimmed === '' ? null : trimmed;
+
+      // Optimistically update the local cache so the cell reflects the new
+      // value without waiting for the network round-trip.
+      const prevValue = cacheRef.current.get(`${rowIndex}_${colIndex}`);
+      cacheRef.current.set(`${rowIndex}_${colIndex}`, sendValue ?? '');
+      bump();
+
+      try {
+        const res = await fetch('/api/cell', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rowIndex, column, value: sendValue }),
+        });
+        if (!res.ok) {
+          const { error } = await res.json();
+          throw new Error(error || `HTTP ${res.status}`);
+        }
+      } catch (err) {
+        // Roll back optimistic update on failure
+        cacheRef.current.set(`${rowIndex}_${colIndex}`, prevValue ?? '');
+        setSaveError(err.message);
+        bump();
+      } finally {
+        commitLockRef.current = false;
+      }
+    },
+    [columns, bump]
+  );
+
+  // ── react-window callbacks ────────────────────────────────────────────────
   const handleItemsRendered = useCallback(
-    ({
-      visibleRowStartIndex,
-      visibleRowStopIndex,
-      visibleColumnStartIndex,
-      visibleColumnStopIndex,
-    }) => {
-      const crStart = Math.floor(visibleRowStartIndex  / CHUNK_ROWS);
-      const crEnd   = Math.floor(visibleRowStopIndex   / CHUNK_ROWS);
+    ({ visibleRowStartIndex, visibleRowStopIndex, visibleColumnStartIndex, visibleColumnStopIndex }) => {
+      const crStart = Math.floor(visibleRowStartIndex    / CHUNK_ROWS);
+      const crEnd   = Math.floor(visibleRowStopIndex     / CHUNK_ROWS);
       const ccStart = Math.floor(visibleColumnStartIndex / CHUNK_COLS);
       const ccEnd   = Math.floor(visibleColumnStopIndex  / CHUNK_COLS);
-
-      for (let cr = crStart; cr <= crEnd; cr++) {
-        for (let cc = ccStart; cc <= ccEnd; cc++) {
+      for (let cr = crStart; cr <= crEnd; cr++)
+        for (let cc = ccStart; cc <= ccEnd; cc++)
           fetchChunk(cr, cc);
-        }
-      }
     },
     [fetchChunk]
   );
@@ -170,31 +224,34 @@ export default function VirtualGrid({ columns, rowCount }) {
     if (headerRef.current) headerRef.current.scrollLeft = scrollLeft;
   }, []);
 
-  // ── itemData ───────────────────────────────────────────────────────────────
-  // `version` changes → new object → React.memo on Cell sees changed prop →
-  // visible cells re-render and read fresh values from cacheRef.
+  // ── itemData ──────────────────────────────────────────────────────────────
+  // Re-created when version OR editingCell changes so Cell.memo invalidates.
   const itemData = useMemo(
-    () => ({ cacheRef, loadingChunksRef, version }),
-    [version]
+    () => ({ cacheRef, loadingChunksRef, version, editingCell, onStartEdit: startEdit, onCommit: commitEdit, onCancel: cancelEdit }),
+    [version, editingCell, startEdit, commitEdit, cancelEdit]
   );
 
-  // ── Dimensions ─────────────────────────────────────────────────────────────
-  // Height available to the grid itself = wrapper height minus the header strip.
-  // Clamp to a minimum so it's usable while the ResizeObserver hasn't fired yet.
+  // ── Dimensions ────────────────────────────────────────────────────────────
   const gridWidth  = wrapperSize.width  || 800;
   const gridHeight = (wrapperSize.height || 600) - HEADER_HEIGHT;
 
   return (
     <div className="vg-outer">
-      {/* Row/column count badge */}
-      <div className="vg-badge">
-        Showing {rowCount.toLocaleString()} rows × {columns.length} columns
-        &nbsp;—&nbsp;scroll to explore
+      <div className="vg-toolbar">
+        <span className="vg-badge">
+          {rowCount.toLocaleString()} rows &times; {columns.length} columns
+          &nbsp;&mdash;&nbsp;double-click any cell to edit
+        </span>
+        {saveError && (
+          <span className="vg-save-error" role="alert">
+            Save failed: {saveError}
+            <button className="vg-save-error-close" onClick={() => setSaveError(null)}>✕</button>
+          </span>
+        )}
       </div>
 
-      {/* Wrapper that fills available space; measured for react-window */}
       <div ref={wrapperRef} className="vg-wrapper">
-        {/* ── Sticky header ── */}
+        {/* Sticky column-header strip */}
         <div
           ref={headerRef}
           className="vg-header"
@@ -212,7 +269,7 @@ export default function VirtualGrid({ columns, rowCount }) {
           ))}
         </div>
 
-        {/* ── Data grid ── */}
+        {/* Data grid */}
         {gridWidth > 0 && (
           <FixedSizeGrid
             columnCount={columns.length}
