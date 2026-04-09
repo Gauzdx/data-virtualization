@@ -1,0 +1,68 @@
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding: 24px;
+  gap: 20px;
+}
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+}
+
+.app-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+
+.app-meta {
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.app-main {
+  flex: 1;
+}
+
+/* Status boxes */
+.status-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.status-loading {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+
+.status-error {
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+}
+
+/* Loading spinner */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #bfdbfe;
+  border-top-color: #1d4ed8;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
