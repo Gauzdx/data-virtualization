@@ -66,7 +66,7 @@ app.get('/api/data', async (req, res) => {
     const rowLimit  = rowEnd - rowStart + 1;
 
     const result = await pool.query(
-      `SELECT ${colList} FROM ttm_random_data ORDER BY "ID" LIMIT $1 OFFSET $2`,
+      `SELECT ${colList} FROM ttm_random_data ORDER BY "id" LIMIT $1 OFFSET $2`,
       [rowLimit, rowStart]
     );
 
@@ -97,8 +97,8 @@ app.put('/api/cell', async (req, res) => {
     await pool.query(
       `UPDATE ttm_random_data
        SET    "${column}" = $1
-       WHERE  "ID" = (
-         SELECT "ID" FROM ttm_random_data ORDER BY "ID" LIMIT 1 OFFSET $2
+       WHERE  "id" = (
+         SELECT "id" FROM ttm_random_data ORDER BY "id" LIMIT 1 OFFSET $2
        )`,
       [value, rowIndex]
     );
