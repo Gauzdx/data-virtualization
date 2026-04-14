@@ -52,8 +52,13 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ── Inner wrapper (measured by ResizeObserver) ───────────────────────────── */
+/* ── Inner wrapper ───────────────────────────────────────────────────────────
+   flex-column so the header takes its fixed height and Grid fills the rest.
+   overflow:hidden clips content to the border-radius corners.
+────────────────────────────────────────────────────────────────────────────── */
 .vg-wrapper {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
   border-radius: 10px;

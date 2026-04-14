@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { FixedSizeGrid } from 'react-window';
+import { Grid } from 'react-window';
 import './VirtualGrid.css';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -18,18 +18,30 @@ const CHUNK_ROWS    = 100;
 const CHUNK_COLS    = 30;
 
 // ─── Cell ─────────────────────────────────────────────────────────────────────
-// Defined outside VirtualGrid so react-window always gets the same component
+// Defined outside VirtualGrid so Grid always receives the same component
 // reference and never forcibly unmounts/remounts every visible cell.
 //
-// itemData shape:
+// react-window v2 spreads `cellProps` directly into cell component props
+// (no `data` wrapper). Grid also injects `ariaAttributes` automatically.
+//
+// cellProps shape:
 //   { cacheRef, loadingChunksRef, version,
 //     editingCell: {rowIndex,colIndex}|null,
 //     onStartEdit: (rowIndex, colIndex) => void,
 //     onCommit:    (rowIndex, colIndex, value: string) => void,
 //     onCancel:    () => void }
-const Cell = memo(({ columnIndex, rowIndex, style, data }) => {
-  const { cacheRef, loadingChunksRef, editingCell, onStartEdit, onCommit, onCancel } = data;
-
+const Cell = memo(({
+  columnIndex,
+  rowIndex,
+  style,
+  ariaAttributes,
+  cacheRef,
+  loadingChunksRef,
+  editingCell,
+  onStartEdit,
+  onCommit,
+  onCancel,
+}) => {
   const isEditing = editingCell?.rowIndex === rowIndex && editingCell?.colIndex === columnIndex;
   const chunkKey  = `${Math.floor(rowIndex / CHUNK_ROWS)}_${Math.floor(columnIndex / CHUNK_COLS)}`;
   const cellKey   = `${rowIndex}_${columnIndex}`;
@@ -39,24 +51,19 @@ const Cell = memo(({ columnIndex, rowIndex, style, data }) => {
 
   // ── Editing mode ────────────────────────────────────────────────────────────
   if (isEditing) {
-    // Uncontrolled input — we read its value from the DOM on commit/cancel.
-    // This avoids re-rendering the entire grid on every keystroke.
     const handleKeyDown = (e) => {
       if (e.key === 'Enter')  { e.preventDefault(); onCommit(rowIndex, columnIndex, e.target.value); }
       if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
     };
-    const handleBlur = (e) => onCommit(rowIndex, columnIndex, e.target.value);
 
     return (
       <div style={{ ...style, padding: 0, boxSizing: 'border-box' }}>
         <input
           className="vg-cell-input"
-          // autoFocus causes the input to grab focus as soon as it mounts
-          // eslint-disable-next-line jsx-a11y/no-autofocus
           autoFocus
           defaultValue={value ?? ''}
           onKeyDown={handleKeyDown}
-          onBlur={handleBlur}
+          onBlur={(e) => onCommit(rowIndex, columnIndex, e.target.value)}
         />
       </div>
     );
@@ -65,6 +72,7 @@ const Cell = memo(({ columnIndex, rowIndex, style, data }) => {
   // ── Display mode ─────────────────────────────────────────────────────────
   return (
     <div
+      {...ariaAttributes}
       className={`vg-data-cell${isEven ? '' : ' vg-data-cell--odd'}`}
       style={style}
       title={value !== undefined ? String(value) : undefined}
@@ -99,20 +107,10 @@ export default function VirtualGrid({ columns, rowCount }) {
   // Guard against double-commit when both Enter (keydown) and blur fire
   const commitLockRef = useRef(false);
 
-  // ── Layout ────────────────────────────────────────────────────────────────
-  const headerRef                      = useRef(null);
-  const wrapperRef                     = useRef(null);
-  const [wrapperSize, setWrapperSize]  = useState({ width: 0, height: 0 });
-
-  useEffect(() => {
-    if (!wrapperRef.current) return;
-    const ro = new ResizeObserver((entries) => {
-      const { width, height } = entries[0].contentRect;
-      setWrapperSize({ width, height });
-    });
-    ro.observe(wrapperRef.current);
-    return () => ro.disconnect();
-  }, []);
+  // ── Header scroll sync ────────────────────────────────────────────────────
+  // The header is a separate overflow:hidden div above the Grid.
+  // We sync its scrollLeft with the Grid's scroll via the onScroll DOM event.
+  const headerRef = useRef(null);
 
   // ── Data fetching ─────────────────────────────────────────────────────────
   const fetchChunk = useCallback(
@@ -154,65 +152,19 @@ export default function VirtualGrid({ columns, rowCount }) {
     [columns.length, rowCount]
   );
 
-  // ── Editing callbacks ─────────────────────────────────────────────────────
-  const startEdit = useCallback((rowIndex, colIndex) => {
-    commitLockRef.current = false;
-    setSaveError(null);
-    setEditingCell({ rowIndex, colIndex });
-  }, []);
+  // ── Grid callbacks ────────────────────────────────────────────────────────
+  // v2: onCellsRendered(visibleCells, allCells)
+  //   visibleCells: { rowStartIndex, rowStopIndex, columnStartIndex, columnStopIndex }
+  //   (v1 used visibleRowStartIndex / visibleColumnStartIndex — names changed in v2)
+  const handleCellsRendered = useCallback(
+    (visibleCells) => {
+      const { rowStartIndex, rowStopIndex, columnStartIndex, columnStopIndex } = visibleCells;
 
-  const cancelEdit = useCallback(() => {
-    commitLockRef.current = false;
-    setEditingCell(null);
-  }, []);
+      const crStart = Math.floor(rowStartIndex    / CHUNK_ROWS);
+      const crEnd   = Math.floor(rowStopIndex     / CHUNK_ROWS);
+      const ccStart = Math.floor(columnStartIndex / CHUNK_COLS);
+      const ccEnd   = Math.floor(columnStopIndex  / CHUNK_COLS);
 
-  const commitEdit = useCallback(
-    async (rowIndex, colIndex, rawValue) => {
-      if (commitLockRef.current) return;
-      commitLockRef.current = true;
-
-      // Close the editor immediately for snappy UX
-      setEditingCell(null);
-
-      const column    = columns[colIndex];
-      const trimmed   = rawValue.trim();
-      const sendValue = trimmed === '' ? null : trimmed;
-
-      // Optimistically update the local cache so the cell reflects the new
-      // value without waiting for the network round-trip.
-      const prevValue = cacheRef.current.get(`${rowIndex}_${colIndex}`);
-      cacheRef.current.set(`${rowIndex}_${colIndex}`, sendValue ?? '');
-      bump();
-
-      try {
-        const res = await fetch('/api/cell', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rowIndex, column, value: sendValue }),
-        });
-        if (!res.ok) {
-          const { error } = await res.json();
-          throw new Error(error || `HTTP ${res.status}`);
-        }
-      } catch (err) {
-        // Roll back optimistic update on failure
-        cacheRef.current.set(`${rowIndex}_${colIndex}`, prevValue ?? '');
-        setSaveError(err.message);
-        bump();
-      } finally {
-        commitLockRef.current = false;
-      }
-    },
-    [columns, bump]
-  );
-
-  // ── react-window callbacks ────────────────────────────────────────────────
-  const handleItemsRendered = useCallback(
-    ({ visibleRowStartIndex, visibleRowStopIndex, visibleColumnStartIndex, visibleColumnStopIndex }) => {
-      const crStart = Math.floor(visibleRowStartIndex    / CHUNK_ROWS);
-      const crEnd   = Math.floor(visibleRowStopIndex     / CHUNK_ROWS);
-      const ccStart = Math.floor(visibleColumnStartIndex / CHUNK_COLS);
-      const ccEnd   = Math.floor(visibleColumnStopIndex  / CHUNK_COLS);
       for (let cr = crStart; cr <= crEnd; cr++)
         for (let cc = ccStart; cc <= ccEnd; cc++)
           fetchChunk(cr, cc);
@@ -220,20 +172,79 @@ export default function VirtualGrid({ columns, rowCount }) {
     [fetchChunk]
   );
 
-  const handleScroll = useCallback(({ scrollLeft }) => {
-    if (headerRef.current) headerRef.current.scrollLeft = scrollLeft;
+  // v2: onScroll is a standard DOM UIEvent (not a custom callback like v1).
+  //   Read scrollLeft from e.currentTarget instead of the destructured arg.
+  const handleScroll = useCallback((e) => {
+    if (headerRef.current) headerRef.current.scrollLeft = e.currentTarget.scrollLeft;
   }, []);
 
-  // ── itemData ──────────────────────────────────────────────────────────────
-  // Re-created when version OR editingCell changes so Cell.memo invalidates.
-  const itemData = useMemo(
-    () => ({ cacheRef, loadingChunksRef, version, editingCell, onStartEdit: startEdit, onCommit: commitEdit, onCancel: cancelEdit }),
-    [version, editingCell, startEdit, commitEdit, cancelEdit]
+  // ── cellProps ─────────────────────────────────────────────────────────────
+  // v2 replaces v1's `itemData` with `cellProps`.
+  // Grid spreads this object directly into every cell component's props.
+  // Re-created when version OR editingCell changes so Cell.memo invalidates
+  // and visible cells re-render with fresh cache / edit state.
+  const cellProps = useMemo(
+    () => ({
+      cacheRef,
+      loadingChunksRef,
+      version,
+      editingCell,
+      onStartEdit: startEdit,
+      onCommit:    commitEdit,
+      onCancel:    cancelEdit,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [version, editingCell]
   );
 
-  // ── Dimensions ────────────────────────────────────────────────────────────
-  const gridWidth  = wrapperSize.width  || 800;
-  const gridHeight = (wrapperSize.height || 600) - HEADER_HEIGHT;
+  // ── Editing callbacks ─────────────────────────────────────────────────────
+  function startEdit(rowIndex, colIndex) {
+    commitLockRef.current = false;
+    setSaveError(null);
+    setEditingCell({ rowIndex, colIndex });
+  }
+
+  function cancelEdit() {
+    commitLockRef.current = false;
+    setEditingCell(null);
+  }
+
+  async function commitEdit(rowIndex, colIndex, rawValue) {
+    if (commitLockRef.current) return;
+    commitLockRef.current = true;
+
+    setEditingCell(null);
+
+    const column    = columns[colIndex];
+    const trimmed   = rawValue.trim();
+    const sendValue = trimmed === '' ? null : trimmed;
+
+    const prevValue = cacheRef.current.get(`${rowIndex}_${colIndex}`);
+    cacheRef.current.set(`${rowIndex}_${colIndex}`, sendValue ?? '');
+    bump();
+
+    try {
+      const res = await fetch('/api/cell', {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ rowIndex, column, value: sendValue }),
+      });
+      if (!res.ok) {
+        const { error } = await res.json();
+        throw new Error(error || `HTTP ${res.status}`);
+      }
+    } catch (err) {
+      cacheRef.current.set(`${rowIndex}_${colIndex}`, prevValue ?? '');
+      setSaveError(err.message);
+      bump();
+    } finally {
+      commitLockRef.current = false;
+    }
+  }
+
+  // cellProps references startEdit/commitEdit/cancelEdit which are plain
+  // functions redefined each render — stable enough since cellProps is
+  // re-created on version/editingCell change anyway.
 
   return (
     <div className="vg-outer">
@@ -250,13 +261,10 @@ export default function VirtualGrid({ columns, rowCount }) {
         )}
       </div>
 
-      <div ref={wrapperRef} className="vg-wrapper">
-        {/* Sticky column-header strip */}
-        <div
-          ref={headerRef}
-          className="vg-header"
-          style={{ width: gridWidth, height: HEADER_HEIGHT }}
-        >
+      {/* vg-wrapper is flex-column; header takes fixed height, Grid fills the rest */}
+      <div className="vg-wrapper">
+        {/* Sticky column-header strip — overflow:hidden hides its own scrollbar */}
+        <div ref={headerRef} className="vg-header" style={{ height: HEADER_HEIGHT }}>
           {columns.map((col, i) => (
             <div
               key={i}
@@ -269,23 +277,21 @@ export default function VirtualGrid({ columns, rowCount }) {
           ))}
         </div>
 
-        {/* Data grid */}
-        {gridWidth > 0 && (
-          <FixedSizeGrid
-            columnCount={columns.length}
-            columnWidth={COLUMN_WIDTH}
-            rowCount={rowCount}
-            rowHeight={ROW_HEIGHT}
-            width={gridWidth}
-            height={gridHeight}
-            itemData={itemData}
-            onScroll={handleScroll}
-            onItemsRendered={handleItemsRendered}
-            className="vg-grid"
-          >
-            {Cell}
-          </FixedSizeGrid>
-        )}
+        {/* Data grid — v2 Grid auto-sizes via its internal ResizeObserver.
+            style={{ flex: 1 }} fills the remaining height after the header. */}
+        <Grid
+          className="vg-grid"
+          style={{ flex: 1 }}
+          columnCount={columns.length}
+          columnWidth={COLUMN_WIDTH}
+          rowCount={rowCount}
+          rowHeight={ROW_HEIGHT}
+          cellComponent={Cell}
+          cellProps={cellProps}
+          onCellsRendered={handleCellsRendered}
+          onScroll={handleScroll}
+          overscanCount={5}
+        />
       </div>
     </div>
   );
