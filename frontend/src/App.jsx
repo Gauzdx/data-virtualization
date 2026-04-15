@@ -2,12 +2,17 @@ import { useEffect, useState } from 'react';
 import VirtualGrid from './components/VirtualGrid';
 import './App.css';
 
+// ── Table name to display ─────────────────────────────────────────────────────
+// Change this constant (or replace it with a prop / route param) to point a
+// VirtualGrid at any other table without modifying the shared API or components.
+const TABLE = 'ttm_random_data';
+
 export default function App() {
   const [metadata, setMetadata] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    fetch('/api/metadata')
+    fetch(`/api/metadata?table=${encodeURIComponent(TABLE)}`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
@@ -39,7 +44,11 @@ export default function App() {
           </div>
         )}
         {metadata && (
-          <VirtualGrid columns={metadata.columns} rowCount={metadata.rowCount} />
+          <VirtualGrid
+            table={TABLE}
+            columns={metadata.columns}
+            rowCount={metadata.rowCount}
+          />
         )}
       </main>
     </div>

@@ -94,7 +94,7 @@ const Cell = memo(({
 Cell.displayName = 'Cell';
 
 // ─── VirtualGrid ─────────────────────────────────────────────────────────────
-export default function VirtualGrid({ columns, rowCount }) {
+export default function VirtualGrid({ table, columns, rowCount }) {
   // ── Data cache (mutable, no re-render on write) ───────────────────────────
   const cacheRef         = useRef(new Map()); // `${row}_${col}` → string
   const loadedChunksRef  = useRef(new Set());
@@ -128,7 +128,7 @@ export default function VirtualGrid({ columns, rowCount }) {
 
       try {
         const res = await fetch(
-          `/api/data?rowStart=${rowStart}&rowEnd=${rowEnd}&colStart=${colStart}&colEnd=${colEnd}`
+          `/api/data?table=${encodeURIComponent(table)}&rowStart=${rowStart}&rowEnd=${rowEnd}&colStart=${colStart}&colEnd=${colEnd}`
         );
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const { rows } = await res.json();
@@ -227,7 +227,7 @@ export default function VirtualGrid({ columns, rowCount }) {
       const res = await fetch('/api/cell', {
         method:  'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ rowIndex, column, value: sendValue }),
+        body:    JSON.stringify({ table, rowIndex, column, value: sendValue }),
       });
       if (!res.ok) {
         const { error } = await res.json();

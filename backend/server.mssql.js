@@ -15,73 +15,94 @@ const dbConfig = {
   user:     process.env.DB_USER     || 'sa',
   password: process.env.DB_PASSWORD || '',
   options: {
-    // Set DB_ENCRYPT=true when connecting to Azure SQL or over TLS
     encrypt:                process.env.DB_ENCRYPT    === 'true',
-    // Set DB_TRUST_CERT=false in production when a valid CA-signed cert is used
     trustServerCertificate: process.env.DB_TRUST_CERT !== 'false',
   },
   pool: { max: 10, min: 0, idleTimeoutMillis: 30000 },
 };
 
-// Lazily initialised singleton pool — reconnects automatically on first error
 let poolPromise = null;
 
 function getPool() {
   if (!poolPromise) {
     poolPromise = sql.connect(dbConfig).catch((err) => {
-      poolPromise = null; // allow retry on next request
+      poolPromise = null;
       throw err;
     });
   }
   return poolPromise;
 }
 
-// ─── Column cache ─────────────────────────────────────────────────────────────
-let columnCache = null;
-
-async function getColumns() {
-  if (columnCache) return columnCache;
-  const pool   = await getPool();
-  const result = await pool.request().query(`
-    SELECT column_name
-    FROM   information_schema.columns
-    WHERE  table_schema = 'dbo'
-      AND  table_name   = 'ttm_random_data'
-    ORDER  BY ordinal_position
-  `);
-  columnCache = result.recordset.map((r) => r.column_name);
-  return columnCache;
+// ─── Table name validation ────────────────────────────────────────────────────
+// Table names cannot be parameterized in SQL, so we validate strictly before
+// interpolating. Only alphanumeric characters and underscores are allowed —
+// this blocks every SQL injection vector while covering all real table names.
+function validateTable(name) {
+  if (typeof name !== 'string' || !/^[a-zA-Z0-9_]+$/.test(name)) {
+    const err = new Error(`Invalid or missing table name: "${name}"`);
+    err.status = 400;
+    throw err;
+  }
+  return name;
 }
 
-// ─── GET /api/metadata  →  { columns: string[], rowCount: number } ───────────
-app.get('/api/metadata', async (_req, res) => {
+// ─── Per-table column cache ───────────────────────────────────────────────────
+// Keyed by table name so any number of tables can be served without re-querying
+// information_schema on every request.
+const columnCacheMap = new Map(); // tableName → string[]
+
+async function getColumns(tableName) {
+  if (columnCacheMap.has(tableName)) return columnCacheMap.get(tableName);
+
+  const pool   = await getPool();
+  // table_name is a WHERE value so @tableName parameterization is safe
+  const result = await pool.request()
+    .input('tableName', sql.NVarChar(128), tableName)
+    .query(`
+      SELECT column_name
+      FROM   information_schema.columns
+      WHERE  table_schema = 'dbo'
+        AND  table_name   = @tableName
+      ORDER  BY ordinal_position
+    `);
+
+  const columns = result.recordset.map((r) => r.column_name);
+  columnCacheMap.set(tableName, columns);
+  return columns;
+}
+
+// ─── GET /api/metadata?table=<name>  →  { columns: string[], rowCount: number }
+app.get('/api/metadata', async (req, res) => {
   try {
-    const pool = await getPool();
+    const table = validateTable(req.query.table);
+    const pool  = await getPool();
+
     const [columns, countResult] = await Promise.all([
-      getColumns(),
-      pool.request().query('SELECT COUNT(*) AS cnt FROM ttm_random_data'),
+      getColumns(table),
+      pool.request().query(`SELECT COUNT(*) AS cnt FROM [${table}]`),
     ]);
+
     res.json({ columns, rowCount: countResult.recordset[0].cnt });
   } catch (err) {
     console.error('[metadata]', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(err.status ?? 500).json({ error: err.message });
   }
 });
 
-// ─── GET /api/data?rowStart&rowEnd&colStart&colEnd ────────────────────────────
+// ─── GET /api/data?table=<name>&rowStart&rowEnd&colStart&colEnd ───────────────
 //     →  { rows: object[], columns: string[] }
 app.get('/api/data', async (req, res) => {
   try {
+    const table    = validateTable(req.query.table);
     const rowStart = Math.max(0, parseInt(req.query.rowStart ?? 0,  10));
     const rowEnd   =             parseInt(req.query.rowEnd   ?? 99,  10);
     const colStart = Math.max(0, parseInt(req.query.colStart ?? 0,  10));
     const colEnd   =             parseInt(req.query.colEnd   ?? 29,  10);
 
-    const allColumns      = await getColumns();
+    const allColumns      = await getColumns(table);
     const selectedColumns = allColumns.slice(colStart, colEnd + 1);
     if (selectedColumns.length === 0) return res.json({ rows: [], columns: [] });
 
-    // Bracket-quote identifiers for MSSQL
     const colList  = selectedColumns.map((c) => `[${c}]`).join(', ');
     const rowLimit = rowEnd - rowStart + 1;
 
@@ -91,7 +112,7 @@ app.get('/api/data', async (req, res) => {
       .input('limit',  sql.Int, rowLimit)
       .query(`
         SELECT ${colList}
-        FROM   ttm_random_data
+        FROM   [${table}]
         ORDER  BY [ID]
         OFFSET @offset ROWS
         FETCH  NEXT @limit ROWS ONLY
@@ -100,39 +121,35 @@ app.get('/api/data', async (req, res) => {
     res.json({ rows: result.recordset, columns: selectedColumns });
   } catch (err) {
     console.error('[data]', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(err.status ?? 500).json({ error: err.message });
   }
 });
 
 // ─── PUT /api/cell  →  update a single cell value ────────────────────────────
-// Body: { rowIndex: number, column: string, value: string | null }
+// Body: { table: string, rowIndex: number, column: string, value: string | null }
 app.put('/api/cell', async (req, res) => {
   try {
     const { rowIndex, column, value } = req.body;
+    const table = validateTable(req.body.table);
 
     if (typeof rowIndex !== 'number' || !column) {
       return res.status(400).json({ error: 'rowIndex (number) and column (string) are required' });
     }
 
-    const allColumns = await getColumns();
+    const allColumns = await getColumns(table);
     if (!allColumns.includes(column)) {
       return res.status(400).json({ error: `Unknown column: ${column}` });
     }
 
     const pool = await getPool();
-
-    // Look up the ID at the given display position (ORDER BY [ID] matches the
-    // fetch query), then update directly by PK — no ROW_NUMBER() needed.
-    // We send value as NVARCHAR(MAX) and let MSSQL implicitly cast to the
-    // target column type (e.g. '42' → INT, null → NULL).
     await pool.request()
-      .input('value',    sql.NVarChar(sql.MAX), value)
-      .input('offset',   sql.Int,               rowIndex)
+      .input('value',  sql.NVarChar(sql.MAX), value)
+      .input('offset', sql.Int,               rowIndex)
       .query(`
-        UPDATE ttm_random_data
+        UPDATE [${table}]
         SET    [${column}] = @value
         WHERE  [ID] = (
-          SELECT [ID] FROM ttm_random_data
+          SELECT [ID] FROM [${table}]
           ORDER  BY [ID]
           OFFSET @offset ROWS FETCH NEXT 1 ROWS ONLY
         )
@@ -141,7 +158,7 @@ app.put('/api/cell', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('[cell update]', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(err.status ?? 500).json({ error: err.message });
   }
 });
 
