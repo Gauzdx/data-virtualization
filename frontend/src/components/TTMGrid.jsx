@@ -1,19 +1,20 @@
 import {
   forwardRef, useImperativeHandle,
-  useState, useEffect, useCallback, useRef, useMemo, useLayoutEffect, memo,
+  useState, useEffect, useCallback, useRef, useMemo, memo, useReducer,
 } from 'react';
 import { Grid } from 'react-window';
 import LeftPanel from './Tasks';
 import './TTMGrid.css';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const ROW_HEIGHT     = 36;
-const RESOURCE_WIDTH = 120;
-const LEFT_WIDTH     = 310; // 90 (task#) + 220 (task name)
-const OVERSCAN_COLS  = 2;
+const ROW_HEIGHT      = 36;
+const RESOURCE_WIDTH  = 120;
+const OVERSCAN_COLS   = 2;
+const CHUNK_SUBTASKS  = 50;   // subtask rows per chunk
+const CHUNK_RESOURCES = 20;   // resource columns per chunk
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-export function buildRows(tasks) {
+function buildRows(tasks) {
   const rows = [];
   tasks.forEach(task => {
     rows.push({ type: 'task', task });
@@ -29,7 +30,7 @@ function ConfirmDialog({ message, onConfirm, onCancel }) {
       <div className="ttm-dialog" onClick={e => e.stopPropagation()}>
         <p className="ttm-dialog-msg">{message}</p>
         <div className="ttm-dialog-actions">
-          <button className="ttm-dlg-btn ttm-dlg-ghost" onClick={onCancel}>Cancel</button>
+          <button className="ttm-dlg-btn ttm-dlg-ghost"  onClick={onCancel}>Cancel</button>
           <button className="ttm-dlg-btn ttm-dlg-danger" onClick={onConfirm}>Delete</button>
         </div>
       </div>
@@ -65,10 +66,9 @@ function ReorderDialog({ title, items, onSave, onClose }) {
           ))}
         </ul>
         <div className="ttm-dialog-actions">
-          <button className="ttm-dlg-btn ttm-dlg-ghost" onClick={onClose}>Cancel</button>
-          <button className="ttm-dlg-btn ttm-dlg-primary" onClick={() => { onSave(list.map(i => i.id)); onClose(); }}>
-            Save Order
-          </button>
+          <button className="ttm-dlg-btn ttm-dlg-ghost"   onClick={onClose}>Cancel</button>
+          <button className="ttm-dlg-btn ttm-dlg-primary"
+            onClick={() => { onSave(list.map(i => i.id)); onClose(); }}>Save Order</button>
         </div>
       </div>
     </div>
@@ -92,13 +92,17 @@ function ResourcePicker({ allResources, addedIds, onSelect, onClose }) {
           value={search} autoFocus onChange={e => setSearch(e.target.value)} />
         <div className="ttm-picker-list">
           {available.length === 0
-            ? <p className="ttm-picker-empty">{allResources.length === 0 ? 'No resources found.' : 'All resources already added.'}</p>
+            ? <p className="ttm-picker-empty">
+                {allResources.length === 0 ? 'No resources found.' : 'All resources already added.'}
+              </p>
             : available.map(r => (
               <button key={r.resource_id} className="ttm-picker-item"
                 onClick={() => { onSelect(r.resource_id); onClose(); }}>
                 <span className="ttm-picker-name">{r.resource_name}</span>
-                <span className="ttm-picker-sub">{r.resource_email} · {r.resource_jobcode}
-                  {r.resource_billing_rate != null ? ` · $${r.resource_billing_rate}/hr` : ''}</span>
+                <span className="ttm-picker-sub">
+                  {r.resource_email} · {r.resource_jobcode}
+                  {r.resource_billing_rate != null ? ` · $${r.resource_billing_rate}/hr` : ''}
+                </span>
               </button>
             ))
           }
@@ -112,9 +116,10 @@ function ResourcePicker({ allResources, addedIds, onSelect, onClose }) {
 }
 
 // ─── DataCell — rendered by react-window Grid ─────────────────────────────────
+// Reads hours from entriesRef (a Map) directly; version in cellProps triggers re-renders.
 const DataCell = memo(({
   rowIndex, columnIndex, style,
-  rows, resources, entries,
+  rows, resources, entriesRef,
   editingCell, commitLockRef,
   onStartEdit, onCommit, onCancel,
 }) => {
@@ -126,19 +131,18 @@ const DataCell = memo(({
 
   if (row.type === 'task') {
     const sum = row.task.subtasks.reduce((acc, sub) => {
-      const h = entries[`${sub.subtask_id}_${resource.resource_id}`];
+      const h = entriesRef.current.get(`${sub.subtask_id}_${resource.resource_id}`);
       return acc + (h != null ? Number(h) : 0);
     }, 0);
     return (
       <div style={style} className="dc dc-task">
-        {sum > 0 ? sum : ''}
+        {sum > 0 ? sum.toFixed(2) : ''}
       </div>
     );
   }
 
-  // Subtask row — editable hours
   const sub   = row.subtask;
-  const value = entries[`${sub.subtask_id}_${resource.resource_id}`];
+  const value = entriesRef.current.get(`${sub.subtask_id}_${resource.resource_id}`);
 
   if (isEditing) {
     const handleCommit = (e) => {
@@ -176,85 +180,149 @@ DataCell.displayName = 'DataCell';
 const TTMGrid = forwardRef(function TTMGrid({ ttm_id }, ref) {
   const [tasks, setTasks]         = useState([]);
   const [resources, setResources] = useState([]);
-  const [entries, setEntries]     = useState({});
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState(null);
-  const [editingCell, setEditing] = useState(null); // { ri, ci }
+  const [editingCell, setEditing] = useState(null);
   const [scrollTop, setScrollTop] = useState(0);
-  const [bodyHeight, setBodyHeight] = useState(400);
-  const [showPicker, setShowPicker]   = useState(false);
-  const [allResources, setAllRes]     = useState([]);
-  const [pickerLoading, setPickLoad]  = useState(false);
-  const [reorderTarget, setReorder]   = useState(null); // 'tasks' | 'resources'
-  const [confirm, setConfirm]         = useState(null);  // { message, onConfirm }
+  const [showPicker, setShowPicker]  = useState(false);
+  const [allResources, setAllRes]    = useState([]);
+  const [pickerLoading, setPickLoad] = useState(false);
+  const [reorderTarget, setReorder]  = useState(null);
+  const [confirm, setConfirm]        = useState(null);
+  const [gridKey, setGridKey]        = useState(0); // increment to remount Grid on structural changes
 
-  const headerRef      = useRef(null);
-  const footerRef      = useRef(null);
-  const bodyRef        = useRef(null);
-  const mainOuterEl    = useRef(null);
-  const rafRef         = useRef(null);
-  const commitLockRef  = useRef(false);
+  // Chunk-based entry cache (no React state — avoids full re-renders on every keystroke)
+  const entriesRef       = useRef(new Map()); // `${subtask_id}_${resource_id}` → number|null
+  const loadedChunksRef  = useRef(new Set());
+  const loadingChunksRef = useRef(new Set());
+  const [version, bump]  = useReducer(v => v + 1, 0); // triggers re-render after chunk loads
+  const visibleRangeRef  = useRef(null);
 
-  // ── Load TTM data ────────────────────────────────────────────────────────────
+  const headerRef     = useRef(null);
+  const footerRef     = useRef(null);
+  const mainOuterEl   = useRef(null);
+  const rafRef        = useRef(null);
+  const commitLockRef = useRef(false);
+
+  // ── Load metadata (tasks + resources only — no entries) ───────────────────────
   useEffect(() => {
     setLoading(true);
+    entriesRef.current.clear();
+    loadedChunksRef.current.clear();
+    loadingChunksRef.current.clear();
     fetch(`/api/ttm/${ttm_id}`)
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-      .then(({ tasks: t, resources: r, entries: e }) => {
+      .then(({ tasks: t, resources: r }) => {
         setTasks(t);
         setResources(r);
-        const map = {};
-        e.forEach(en => { map[`${en.subtask_id}_${en.resource_id}`] = en.ttm_entry_hours; });
-        setEntries(map);
         setLoading(false);
       })
       .catch(err => { setError(err.message); setLoading(false); });
   }, [ttm_id]);
 
-  // ── Measure body height for left panel virtualization ────────────────────────
-  useLayoutEffect(() => {
-    if (!bodyRef.current) return;
-    const ro = new ResizeObserver(es => setBodyHeight(es[0].contentRect.height));
-    ro.observe(bodyRef.current);
-    return () => ro.disconnect();
-  }, []);
+  // ── Derived data ──────────────────────────────────────────────────────────────
+  const rows = useMemo(() => buildRows(tasks), [tasks]);
 
-  // ── Imperative API for TopNav buttons ────────────────────────────────────────
+  // Flat ordered subtask list (parallel to the subtask dimension of the grid)
+  const subtaskList = useMemo(() => {
+    const list = [];
+    tasks.forEach(task => task.subtasks.forEach(sub => list.push(sub)));
+    return list;
+  }, [tasks]);
+
+  // Map: row index → subtask index in subtaskList (-1 for task header rows)
+  const rowToSubtaskIdx = useMemo(() => {
+    const map = [];
+    let si = 0;
+    rows.forEach((row, ri) => { map[ri] = row.type === 'subtask' ? si++ : -1; });
+    return map;
+  }, [rows]);
+
+  // ── Chunk fetching ────────────────────────────────────────────────────────────
+  const fetchChunk = useCallback(async (chunkRow, chunkCol) => {
+    const key = `${chunkRow}_${chunkCol}`;
+    if (loadedChunksRef.current.has(key) || loadingChunksRef.current.has(key)) return;
+    loadingChunksRef.current.add(key);
+
+    const subFrom = chunkRow * CHUNK_SUBTASKS;
+    const subTo   = Math.min(subFrom + CHUNK_SUBTASKS - 1, subtaskList.length - 1);
+    const resFrom = chunkCol * CHUNK_RESOURCES;
+    const resTo   = Math.min(resFrom + CHUNK_RESOURCES - 1, resources.length - 1);
+
+    if (subFrom > subTo || resFrom > resTo) {
+      loadingChunksRef.current.delete(key);
+      return;
+    }
+
+    try {
+      const res = await fetch(
+        `/api/ttm/${ttm_id}/entries?subFrom=${subFrom}&subTo=${subTo}&resFrom=${resFrom}&resTo=${resTo}`
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const { entries } = await res.json();
+      entries.forEach(e => {
+        entriesRef.current.set(`${e.subtask_id}_${e.resource_id}`, e.ttm_entry_hours);
+      });
+      loadedChunksRef.current.add(key);
+    } catch (err) {
+      console.error('[entries chunk]', err.message);
+    } finally {
+      loadingChunksRef.current.delete(key);
+      bump();
+    }
+  }, [ttm_id, subtaskList.length, resources.length]);
+
+  // ── onCellsRendered — trigger chunk fetches for visible viewport ───────────────
+  const handleCellsRendered = useCallback((visibleCells) => {
+    const { rowStartIndex, rowStopIndex, columnStartIndex, columnStopIndex } = visibleCells;
+    visibleRangeRef.current = { rowStartIndex, rowStopIndex, columnStartIndex, columnStopIndex };
+
+    // Find subtask index range for the visible rows
+    let minSi = Infinity, maxSi = -Infinity;
+    for (let ri = rowStartIndex; ri <= rowStopIndex; ri++) {
+      const si = rowToSubtaskIdx[ri];
+      if (si >= 0) { minSi = Math.min(minSi, si); maxSi = Math.max(maxSi, si); }
+    }
+    if (minSi > maxSi) return; // only task header rows visible
+
+    const crStart = Math.floor(minSi / CHUNK_SUBTASKS);
+    const crEnd   = Math.floor(maxSi / CHUNK_SUBTASKS);
+    const ccStart = Math.floor(columnStartIndex / CHUNK_RESOURCES);
+    const ccEnd   = Math.floor(columnStopIndex  / CHUNK_RESOURCES);
+
+    for (let cr = crStart; cr <= crEnd; cr++)
+      for (let cc = ccStart; cc <= ccEnd; cc++)
+        fetchChunk(cr, cc);
+  }, [rowToSubtaskIdx, fetchChunk]);
+
+  // ── Imperative API for TopNav ─────────────────────────────────────────────────
   useImperativeHandle(ref, () => ({
-    addTask: handleAddTask,
+    addTask:            handleAddTask,
     openResourcePicker: handleOpenPicker,
-    openReorder: (type) => setReorder(type),
+    openReorder:        (type) => setReorder(type),
   }));
 
-  // ── Scroll sync ──────────────────────────────────────────────────────────────
+  // ── Scroll sync ───────────────────────────────────────────────────────────────
   const handleGridScroll = useCallback((e) => {
     mainOuterEl.current = e.currentTarget;
     const { scrollTop: top, scrollLeft: left } = e.currentTarget;
-
-    // Header and footer: use CSS transform to avoid overflow:hidden scrollLeft bug
     if (headerRef.current) headerRef.current.style.transform = `translateX(-${left}px)`;
     if (footerRef.current) footerRef.current.style.transform = `translateX(-${left}px)`;
-
-    // Left panel: batch via rAF so React re-renders happen at 60fps
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(() => setScrollTop(top));
   }, []);
 
-  // Forward wheel events from left panel area to the main grid
   const handleLeftWheel = useCallback((e) => {
     if (!mainOuterEl.current) return;
     e.preventDefault();
     mainOuterEl.current.scrollTop += e.deltaY;
   }, []);
 
-  // ── Derived rows ─────────────────────────────────────────────────────────────
-  const rows = useMemo(() => buildRows(tasks), [tasks]);
-
-  // ── cellProps for react-window (recreated when editing/entries/rows change) ──
+  // ── cellProps — version included so DataCell re-renders when chunks arrive ─────
   const cellProps = useMemo(() => ({
-    rows, resources, entries, editingCell, commitLockRef,
+    rows, resources, entriesRef, editingCell, commitLockRef,
     onStartEdit: (ri, ci) => { commitLockRef.current = false; setEditing({ ri, ci }); },
-    onCommit:    (ri, ci, val) => {
+    onCommit: (ri, ci, val) => {
       setEditing(null);
       commitLockRef.current = false;
       const row      = rows[ri];
@@ -262,7 +330,8 @@ const TTMGrid = forwardRef(function TTMGrid({ ttm_id }, ref) {
       if (!row || row.type !== 'subtask' || !resource) return;
       const sub   = row.subtask;
       const hours = val === '' || val == null ? null : parseFloat(val);
-      setEntries(prev => ({ ...prev, [`${sub.subtask_id}_${resource.resource_id}`]: hours }));
+      entriesRef.current.set(`${sub.subtask_id}_${resource.resource_id}`, hours);
+      bump();
       fetch('/api/ttm', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -274,9 +343,17 @@ const TTMGrid = forwardRef(function TTMGrid({ ttm_id }, ref) {
     },
     onCancel: () => { setEditing(null); commitLockRef.current = false; },
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [rows, resources, entries, editingCell, ttm_id]);
+  }), [rows, resources, editingCell, version, ttm_id]);
 
-  // ── Add task ─────────────────────────────────────────────────────────────────
+  // ── Cache invalidation — clears all loaded entry chunks + remounts Grid ────────
+  const invalidateCache = useCallback(() => {
+    entriesRef.current.clear();
+    loadedChunksRef.current.clear();
+    loadingChunksRef.current.clear();
+    setGridKey(k => k + 1);
+  }, []);
+
+  // ── Add task ──────────────────────────────────────────────────────────────────
   const handleAddTask = useCallback(async () => {
     try {
       const res = await fetch('/api/tasks', {
@@ -285,11 +362,11 @@ const TTMGrid = forwardRef(function TTMGrid({ ttm_id }, ref) {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const newTask = await res.json();
-      setTasks(prev => [...prev, { ...newTask, _new: true }]);
+      setTasks(prev => [...prev, newTask]);
     } catch (err) { console.error('Add task failed:', err.message); }
   }, [ttm_id]);
 
-  // ── Add resource ─────────────────────────────────────────────────────────────
+  // ── Add resource ──────────────────────────────────────────────────────────────
   const handleOpenPicker = useCallback(async () => {
     if (allResources.length === 0 && !pickerLoading) {
       setPickLoad(true);
@@ -337,10 +414,11 @@ const TTMGrid = forwardRef(function TTMGrid({ ttm_id }, ref) {
       onConfirm: async () => {
         setConfirm(null);
         await fetch(`/api/tasks/${task_id}`, { method: 'DELETE' });
+        invalidateCache();
         setTasks(prev => prev.filter(t => t.task_id !== task_id));
       },
     });
-  }, []);
+  }, [invalidateCache]);
 
   // ── Delete subtask ────────────────────────────────────────────────────────────
   const handleDeleteSubtask = useCallback((task_id, subtask_id, subtask_name) => {
@@ -349,6 +427,7 @@ const TTMGrid = forwardRef(function TTMGrid({ ttm_id }, ref) {
       onConfirm: async () => {
         setConfirm(null);
         await fetch(`/api/subtasks/${subtask_id}`, { method: 'DELETE' });
+        invalidateCache();
         setTasks(prev => prev.map(t =>
           t.task_id === task_id
             ? { ...t, subtasks: t.subtasks.filter(s => s.subtask_id !== subtask_id) }
@@ -356,7 +435,7 @@ const TTMGrid = forwardRef(function TTMGrid({ ttm_id }, ref) {
         ));
       },
     });
-  }, []);
+  }, [invalidateCache]);
 
   // ── Delete resource ───────────────────────────────────────────────────────────
   const handleDeleteResource = useCallback((resource_id, resource_name) => {
@@ -365,15 +444,11 @@ const TTMGrid = forwardRef(function TTMGrid({ ttm_id }, ref) {
       onConfirm: async () => {
         setConfirm(null);
         await fetch(`/api/ttm-resources/${ttm_id}/${resource_id}`, { method: 'DELETE' });
+        invalidateCache();
         setResources(prev => prev.filter(r => r.resource_id !== resource_id));
-        setEntries(prev => {
-          const next = { ...prev };
-          Object.keys(next).forEach(k => { if (k.endsWith(`_${resource_id}`)) delete next[k]; });
-          return next;
-        });
       },
     });
-  }, [ttm_id]);
+  }, [ttm_id, invalidateCache]);
 
   // ── Reorder tasks ─────────────────────────────────────────────────────────────
   const handleSaveTaskOrder = useCallback(async (taskIds) => {
@@ -381,11 +456,12 @@ const TTMGrid = forwardRef(function TTMGrid({ ttm_id }, ref) {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ taskIds }),
     });
+    invalidateCache();
     setTasks(prev => {
       const map = Object.fromEntries(prev.map(t => [t.task_id, t]));
       return taskIds.map(id => map[id]);
     });
-  }, [ttm_id]);
+  }, [ttm_id, invalidateCache]);
 
   // ── Reorder resources ─────────────────────────────────────────────────────────
   const handleSaveResourceOrder = useCallback(async (resourceIds) => {
@@ -393,24 +469,23 @@ const TTMGrid = forwardRef(function TTMGrid({ ttm_id }, ref) {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ resourceIds }),
     });
+    invalidateCache();
     setResources(prev => {
       const map = Object.fromEntries(prev.map(r => [r.resource_id, r]));
       return resourceIds.map(id => map[id]);
     });
-  }, [ttm_id]);
+  }, [ttm_id, invalidateCache]);
 
-  // ── Footer totals ─────────────────────────────────────────────────────────────
-  const totalHours = useCallback((resource_id) =>
+  // ── Footer totals (read from entriesRef at render time, refreshed by version) ──
+  const getTotalHours = (resource_id) =>
     tasks.reduce((acc, task) =>
       acc + task.subtasks.reduce((a, sub) => {
-        const h = entries[`${sub.subtask_id}_${resource_id}`];
+        const h = entriesRef.current.get(`${sub.subtask_id}_${resource_id}`);
         return a + (h != null ? Number(h) : 0);
-      }, 0), 0),
-  [tasks, entries]);
+      }, 0), 0);
 
-  const totalFees = useCallback((resource) =>
-    totalHours(resource.resource_id) * (resource.resource_billing_rate ?? 0),
-  [totalHours]);
+  const getTotalFees = (resource) =>
+    getTotalHours(resource.resource_id) * (resource.resource_billing_rate ?? 0);
 
   // ── Render ────────────────────────────────────────────────────────────────────
   if (loading) return <div className="ttm-status"><span className="ttm-spinner" /> Loading…</div>;
@@ -421,15 +496,13 @@ const TTMGrid = forwardRef(function TTMGrid({ ttm_id }, ref) {
   return (
     <div className="ttm-shell">
 
-      {/* ── Sticky header (4 info rows) ───────────────────────────────────── */}
+      {/* ── Sticky header (resource info rows) ───────────────────────────── */}
       <div className="ttm-head">
-        {/* Corner: header labels for the left columns */}
         <div className="ttm-corner">
           {['Name', 'Email', 'Job Code', 'Rate'].map(label => (
             <div key={label} className="ttm-corner-cell">{label}</div>
           ))}
         </div>
-        {/* Resource info columns — shift via transform on scroll */}
         <div className="ttm-head-clip">
           <div ref={headerRef} className="ttm-head-inner" style={{ width: totalResourceWidth }}>
             {resources.map(r => (
@@ -451,14 +524,13 @@ const TTMGrid = forwardRef(function TTMGrid({ ttm_id }, ref) {
       </div>
 
       {/* ── Body: left panel + main virtual grid ─────────────────────────── */}
-      <div ref={bodyRef} className="ttm-body">
+      <div className="ttm-body">
 
-        {/* Left panel: custom virtual (sticky left) */}
+        {/* Left panel: custom virtual list */}
         <div className="ttm-left" onWheel={handleLeftWheel}>
           <LeftPanel
             rows={rows}
             scrollTop={scrollTop}
-            containerHeight={bodyHeight}
             onEditTaskField={handleEditTaskField}
             onEditSubtaskField={handleEditSubtaskField}
             onDeleteTask={handleDeleteTask}
@@ -466,8 +538,9 @@ const TTMGrid = forwardRef(function TTMGrid({ ttm_id }, ref) {
           />
         </div>
 
-        {/* Main data grid: react-window */}
+        {/* Main data grid: react-window with chunk-based entry fetching */}
         <Grid
+          key={gridKey}
           style={{ flex: 1 }}
           rowCount={rows.length}
           columnCount={resources.length}
@@ -475,6 +548,7 @@ const TTMGrid = forwardRef(function TTMGrid({ ttm_id }, ref) {
           columnWidth={RESOURCE_WIDTH}
           cellComponent={DataCell}
           cellProps={cellProps}
+          onCellsRendered={handleCellsRendered}
           onScroll={handleGridScroll}
           overscanCount={OVERSCAN_COLS}
         />
@@ -489,12 +563,12 @@ const TTMGrid = forwardRef(function TTMGrid({ ttm_id }, ref) {
         <div className="ttm-foot-clip">
           <div ref={footerRef} className="ttm-foot-inner" style={{ width: totalResourceWidth }}>
             {resources.map(r => {
-              const hrs  = totalHours(r.resource_id);
-              const fees = totalFees(r);
+              const hrs  = getTotalHours(r.resource_id);
+              const fees = getTotalFees(r);
               return (
                 <div key={r.resource_id} className="ttm-res-foot-col" style={{ width: RESOURCE_WIDTH }}>
-                  <div className="ttm-fcell">{hrs || ''}</div>
-                  <div className="ttm-fcell">{fees ? `$${fees.toLocaleString()}` : ''}</div>
+                  <div className="ttm-fcell">{hrs.toFixed(2) || ''}</div>
+                  <div className="ttm-fcell">{fees.toFixed(2) || ''}</div>
                 </div>
               );
             })}

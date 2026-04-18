@@ -1,4 +1,4 @@
-import { memo, useState, Fragment } from 'react';
+import { memo, useState, useLayoutEffect, useRef, Fragment } from 'react';
 
 const ROW_HEIGHT    = 36;
 const TASK_NUM_W    = 90;
@@ -95,29 +95,37 @@ function SubtaskRow({ task, subtask, style, onEditSubtaskField, onDeleteSubtask 
 // Renders only those rows with absolute positioning inside a full-height spacer.
 // The outer div is overflow:hidden; the parent forwards wheel events to main Grid.
 const LeftPanel = memo(function LeftPanel({
-  rows, scrollTop, containerHeight,
+  rows, scrollTop,
   onEditTaskField, onEditSubtaskField, onDeleteTask, onDeleteSubtask,
 }) {
-  const totalHeight = rows.length * ROW_HEIGHT;
+  const outerRef = useRef(null);
+  const [localHeight, setLocalHeight] = useState(600);
+
+  useLayoutEffect(() => {
+    if (!outerRef.current) return;
+    const ro = new ResizeObserver(es => setLocalHeight(es[0].contentRect.height));
+    ro.observe(outerRef.current);
+    return () => ro.disconnect();
+  }, []);
 
   const startIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN_ROWS);
   const endIdx   = Math.min(
     rows.length - 1,
-    Math.ceil((scrollTop + containerHeight) / ROW_HEIGHT) + OVERSCAN_ROWS
+    Math.ceil((scrollTop + localHeight) / ROW_HEIGHT) + OVERSCAN_ROWS
   );
 
   const visibleRows = rows.slice(startIdx, endIdx + 1);
 
   return (
     <div
+      ref={outerRef}
       className="lp-outer"
-      style={{ height: containerHeight, overflow: 'hidden', width: TASK_NUM_W + TASK_NAME_W }}
+      style={{ position: 'relative', height: '100%', overflow: 'hidden', width: TASK_NUM_W + TASK_NAME_W }}
     >
-      {/* Full-height spacer keeps the virtual content in correct position */}
-      <div style={{ position: 'relative', height: totalHeight }}>
-        {visibleRows.map((row, i) => {
+      {visibleRows.map((row, i) => {
           const absIdx = startIdx + i;
-          const top    = absIdx * ROW_HEIGHT;
+          // Offset by scrollTop so rows stay in the correct viewport position
+          const top    = absIdx * ROW_HEIGHT - scrollTop;
           const baseStyle = { position: 'absolute', top, height: ROW_HEIGHT, width: '100%', display: 'flex' };
 
           if (row.type === 'task') {
@@ -142,7 +150,6 @@ const LeftPanel = memo(function LeftPanel({
             />
           );
         })}
-      </div>
     </div>
   );
 });

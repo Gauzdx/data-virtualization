@@ -158,19 +158,19 @@ app.post('/api/ttm', async (req, res) => {
 });
 
 // ─── GET /api/ttm/:ttm_id ─────────────────────────────────────────────────────
-// Returns all tasks (with nested subtasks), ttm_resources (with resource info),
-// and ttm_entries for a given TTM in one shot.
+// Returns tasks (with nested subtasks) and resources — no entries.
+// Entries are fetched on demand via /api/ttm/:ttm_id/entries.
 app.get('/api/ttm/:ttm_id', async (req, res) => {
   const ttm_id = parseInt(req.params.ttm_id, 10);
   if (isNaN(ttm_id)) return res.status(400).json({ error: 'Invalid ttm_id' });
   try {
-    const [tasksRes, subsRes, resourcesRes, entriesRes] = await Promise.all([
+    const [tasksRes, subsRes, resourcesRes] = await Promise.all([
       pool.query('SELECT * FROM tasks WHERE ttm_id = $1 ORDER BY task_order', [ttm_id]),
       pool.query(
         `SELECT s.* FROM subtasks s
          JOIN tasks t ON t.task_id = s.task_id
          WHERE t.ttm_id = $1
-         ORDER BY s.task_id, s.subtask_order`,
+         ORDER BY t.task_order, s.subtask_order`,
         [ttm_id]
       ),
       pool.query(
@@ -181,16 +181,73 @@ app.get('/api/ttm/:ttm_id', async (req, res) => {
          ORDER BY tr.resource_order`,
         [ttm_id]
       ),
-      pool.query('SELECT * FROM ttm_entries WHERE ttm_id = $1', [ttm_id]),
     ]);
     const subsByTask = {};
     subsRes.rows.forEach(s => {
       (subsByTask[s.task_id] = subsByTask[s.task_id] || []).push(s);
     });
     const tasks = tasksRes.rows.map(t => ({ ...t, subtasks: subsByTask[t.task_id] || [] }));
-    res.json({ tasks, resources: resourcesRes.rows, entries: entriesRes.rows });
+    res.json({ tasks, resources: resourcesRes.rows });
   } catch (err) {
     console.error('[ttm get]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GET /api/ttm/:ttm_id/entries ─────────────────────────────────────────────
+// Returns a chunk of ttm_entries for the visible viewport.
+// Query params:
+//   subFrom, subTo   — 0-based position range into the ordered subtask list
+//   resFrom, resTo   — 0-based position range into the ordered resource list
+app.get('/api/ttm/:ttm_id/entries', async (req, res) => {
+  const ttm_id  = parseInt(req.params.ttm_id, 10);
+  const subFrom = Math.max(0, parseInt(req.query.subFrom ?? 0,  10));
+  const subTo   =             parseInt(req.query.subTo   ?? 49, 10);
+  const resFrom = Math.max(0, parseInt(req.query.resFrom ?? 0,  10));
+  const resTo   =             parseInt(req.query.resTo   ?? 19, 10);
+  if (isNaN(ttm_id)) return res.status(400).json({ error: 'Invalid ttm_id' });
+
+  try {
+    // Resolve positional ranges to actual IDs using the same sort orders
+    const [subsRes, resRes] = await Promise.all([
+      pool.query(
+        `SELECT s.subtask_id
+         FROM subtasks s
+         JOIN tasks t ON t.task_id = s.task_id
+         WHERE t.ttm_id = $1
+         ORDER BY t.task_order, s.subtask_order
+         LIMIT $2 OFFSET $3`,
+        [ttm_id, subTo - subFrom + 1, subFrom]
+      ),
+      pool.query(
+        `SELECT resource_id
+         FROM ttm_resources
+         WHERE ttm_id = $1
+         ORDER BY resource_order
+         LIMIT $2 OFFSET $3`,
+        [ttm_id, resTo - resFrom + 1, resFrom]
+      ),
+    ]);
+
+    const subtaskIds  = subsRes.rows.map(r => r.subtask_id);
+    const resourceIds = resRes.rows.map(r => r.resource_id);
+
+    if (subtaskIds.length === 0 || resourceIds.length === 0) {
+      return res.json({ entries: [] });
+    }
+
+    const entriesRes = await pool.query(
+      `SELECT subtask_id, resource_id, ttm_entry_hours
+       FROM ttm_entries
+       WHERE ttm_id = $1
+         AND subtask_id  = ANY($2::int[])
+         AND resource_id = ANY($3::int[])`,
+      [ttm_id, subtaskIds, resourceIds]
+    );
+
+    res.json({ entries: entriesRes.rows });
+  } catch (err) {
+    console.error('[entries chunk]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
