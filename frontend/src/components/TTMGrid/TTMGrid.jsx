@@ -41,28 +41,33 @@ function ConfirmDialog({ message, onConfirm, onCancel }) {
 function ReorderDialog({ title, items, onSave, onClose }) {
   const [list, setList] = useState(items);
 
-  const move = (idx, dir) => {
-    const next = [...list];
-    const swap = idx + dir;
-    if (swap < 0 || swap >= next.length) return;
-    [next[idx], next[swap]] = [next[swap], next[idx]];
-    setList(next);
+  // Move item from `fromIdx` to `toIdx` (both 0-based). Clamps out-of-range values.
+  const moveTo = (fromIdx, toIdx) => {
+    const max = list.length - 1;
+    const target = Math.max(0, Math.min(max, toIdx));
+    if (target === fromIdx) return;
+    setList(prev => {
+      const next = [...prev];
+      const [item] = next.splice(fromIdx, 1);
+      next.splice(target, 0, item);
+      return next;
+    });
   };
 
   return (
     <div className="ttm-overlay" onClick={onClose}>
       <div className="ttm-dialog ttm-dialog-reorder" onClick={e => e.stopPropagation()}>
         <h3 className="ttm-dialog-title">{title}</h3>
+        <p className="ttm-reorder-hint">Type a position and press Enter to move an item.</p>
         <ul className="ttm-reorder-list">
           {list.map((item, idx) => (
-            <li key={item.id} className="ttm-reorder-item">
-              <span className="ttm-reorder-num">{idx + 1}</span>
-              <span className="ttm-reorder-label">{item.label}</span>
-              <div className="ttm-reorder-btns">
-                <button className="ttm-reorder-arrow" onClick={() => move(idx, -1)} disabled={idx === 0}>▲</button>
-                <button className="ttm-reorder-arrow" onClick={() => move(idx, 1)}  disabled={idx === list.length - 1}>▼</button>
-              </div>
-            </li>
+            <PositionRow
+              key={item.id}
+              idx={idx}
+              total={list.length}
+              label={item.label}
+              onCommit={(newIdx) => moveTo(idx, newIdx)}
+            />
           ))}
         </ul>
         <div className="ttm-dialog-actions">
@@ -72,6 +77,39 @@ function ReorderDialog({ title, items, onSave, onClose }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function PositionRow({ idx, total, label, onCommit }) {
+  const [draft, setDraft] = useState(String(idx + 1));
+
+  // Reset draft whenever this row's index changes (after a reorder)
+  useEffect(() => { setDraft(String(idx + 1)); }, [idx]);
+
+  const commit = () => {
+    const n = parseInt(draft, 10);
+    if (Number.isNaN(n)) { setDraft(String(idx + 1)); return; }
+    onCommit(n - 1);
+  };
+
+  return (
+    <li className="ttm-reorder-item">
+      <input
+        className="ttm-reorder-pos"
+        type="number"
+        min="1"
+        max={total}
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onFocus={e => e.target.select()}
+        onBlur={commit}
+        onKeyDown={e => {
+          if (e.key === 'Enter')  { e.preventDefault(); e.target.blur(); }
+          if (e.key === 'Escape') { setDraft(String(idx + 1)); e.target.blur(); }
+        }}
+      />
+      <span className="ttm-reorder-label">{label}</span>
+    </li>
   );
 }
 
