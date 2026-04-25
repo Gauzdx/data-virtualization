@@ -1,14 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm install:*)",
-      "Bash(sudo chown:*)",
-      "Bash(npm show:*)",
-      "Bash(node -e \"const v=JSON.parse\\(require\\('fs'\\).readFileSync\\('/dev/stdin','utf8'\\)\\); console.log\\('All versions:', v.join\\(', '\\)\\)\")",
-      "Bash(node -e \"const rw = require\\('/tmp/rw2test/node_modules/react-window'\\); console.log\\('Exports:', Object.keys\\(rw\\).join\\(', '\\)\\)\")",
-      "Read(//tmp/rw2test/node_modules/react-window/**)",
-      "Read(//private/tmp/rw2test/node_modules/react-window/**)",
-      "Bash(node -e \"console.log\\(require\\('/Users/gauzdx/Documents/data-virtualization/frontend/node_modules/react-window/package.json'\\).version\\)\")"
+      "Bash(npm install *)",
+      "Bash(npx vite *)"
     ]
   }
 }
