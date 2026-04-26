@@ -1,50 +1,54 @@
 .app {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  overflow: hidden;
-  background: #fff;
+	display: flex;
+	flex-direction: column;
+	height: 100vh;
+	overflow: hidden;
+	background: var(--surface);
 }
 
 .app-main {
-  flex: 1;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
+	flex: 1;
+	overflow: hidden;
+	display: flex;
+	flex-direction: column;
 }
 
-/* ── Status boxes (loading / error) ─────────────────────────────────────────── */
+/* ─── Status boxes ──────────────────────────────────────────────────────────── */
 .status-box {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 20px;
-  border-radius: 6px;
-  font-size: 14px;
-  font-weight: 500;
-  margin: 24px;
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	padding: 12px 20px;
+	border-radius: var(--r-md);
+	font-size: var(--fs-md);
+	font-weight: var(--fw-medium);
+	margin: 24px;
 }
 
 .status-loading {
-  background: #f5f5f5;
-  color: #333;
-  border: 1px solid #ddd;
+	background: var(--surface-2);
+	color: var(--text-1);
+	border: 1px solid var(--border-3);
 }
 
 .status-error {
-  background: #fff0f0;
-  color: #cc0000;
-  border: 1px solid #ffaaaa;
+	background: var(--brand-red-tint);
+	color: var(--brand-red);
+	border: 1px solid var(--brand-red);
 }
 
 .spinner {
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  border: 2px solid #ccc;
-  border-top-color: #111;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
+	display: inline-block;
+	width: 14px;
+	height: 14px;
+	border: 2px solid var(--border-3);
+	border-top-color: var(--text-1);
+	border-radius: 50%;
+	animation: spin 0.7s linear infinite;
 }
 
-@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes spin {
+	to {
+		transform: rotate(360deg);
+	}
+}

@@ -1,29 +1,134 @@
-*, *::before, *::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-  font-family: Arial, sans-serif;
+/* ─────────────────────────────────────────────────────────────────────────────
+   Design tokens
+   Brand: black, white, red #FF372F. Body font Arial; cell numbers monospace.
+   ───────────────────────────────────────────────────────────────────────── */
+:root {
+	/* Brand */
+	--brand-black: #000000;
+	--brand-white: #ffffff;
+	--brand-red: #ff372f;
+	--brand-red-dk: #d4221b; /* hover / pressed */
+	--brand-red-soft: rgba(255, 55, 47, 0.12); /* focus ring fill */
+	--brand-red-tint: #fff5f5; /* hovered cell bg */
+
+	/* Surfaces */
+	--surface: var(--brand-white);
+	--surface-1: #fafafa;
+	--surface-2: #f5f5f5;
+	--surface-3: #f0f0f0;
+	--surface-dark: #111111;
+	--surface-darker: #000000;
+	--overlay-bg: rgba(0, 0, 0, 0.55);
+
+	/* Borders */
+	--border-1: #eeeeee;
+	--border-2: #e5e5e5;
+	--border-3: #dddddd;
+	--border-dark: #333333;
+
+	/* Text */
+	--text-1: #111111;
+	--text-2: #555555;
+	--text-3: #888888;
+	--text-4: #aaaaaa;
+	--text-on-dark: var(--brand-white);
+	--text-on-dark-2: #bbbbbb;
+	--text-on-dark-3: #777777;
+
+	/* Typography */
+	--font-sans: Arial, Helvetica, sans-serif;
+	--font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+
+	--fs-xs: 11px;
+	--fs-sm: 12px;
+	--fs-base: 13px;
+	--fs-md: 14px;
+	--fs-lg: 15px;
+	--fs-xl: 17px;
+	--fs-2xl: 20px;
+	--fs-3xl: 22px;
+	--fs-4xl: 26px;
+	--fs-display: 64px;
+
+	--fw-normal: 400;
+	--fw-medium: 600;
+	--fw-bold: 700;
+	--fw-heavy: 800;
+	--fw-black: 900;
+
+	/* Radius */
+	--r-sm: 3px;
+	--r-md: 5px;
+	--r-lg: 8px;
+	--r-xl: 10px;
+
+	/* Layout */
+	--row-h: 36px;
+	--left-w: 310px;
+
+	/* Motion */
+	--t-fast: 0.1s;
+	--t-base: 0.15s;
+	--t-slow: 0.25s;
+
+	/* Z-index */
+	--z-grid: 20;
+	--z-sticky: 30;
+	--z-nav: 50;
+	--z-overlay: 100;
+	--z-modal: 200;
+
+	/* Shadow */
+	--shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.1);
+	--shadow-md: 0 4px 20px rgba(0, 0, 0, 0.12);
+	--shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.25);
+	--shadow-xl: 0 24px 64px rgba(0, 0, 0, 0.25);
+}
+
+/* ─── Reset ─────────────────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+	margin: 0;
+	padding: 0;
+	font-family: var(--font-sans);
 }
 
 body {
-  background: #ffffff;
-  color: #000000;
-  min-height: 100vh;
-  -webkit-font-smoothing: antialiased;
+	background: var(--surface);
+	color: var(--text-1);
+	min-height: 100vh;
+	-webkit-font-smoothing: antialiased;
 }
 
 #root {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
+	min-height: 100vh;
+	display: flex;
+	flex-direction: column;
 }
 
-/* ── Scrollbars ─────────────────────────────────────────────────────────────── */
-::-webkit-scrollbar        { width: 8px; height: 8px; }
-::-webkit-scrollbar-track  { background: #f0f0f0; }
-::-webkit-scrollbar-thumb  { background: #999; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #666; }
-::-webkit-scrollbar-corner { background: #f0f0f0; }
+/* ─── Scrollbars ────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+::-webkit-scrollbar-track {
+	background: var(--surface-3);
+}
+::-webkit-scrollbar-thumb {
+	background: #999;
+	border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+	background: #666;
+}
+::-webkit-scrollbar-corner {
+	background: var(--surface-3);
+}
 
-/* ── Focus ring ─────────────────────────────────────────────────────────────── */
-:focus-visible { outline: 2px solid #cc0000; outline-offset: 2px; }
+/* ─── Focus ring (keyboard only) ────────────────────────────────────────────── */
+:focus-visible {
+	outline: 2px solid var(--brand-red);
+	outline-offset: 2px;
+}
