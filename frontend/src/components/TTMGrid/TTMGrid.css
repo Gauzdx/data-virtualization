@@ -472,6 +472,48 @@
 	background: #333;
 }
 
+/* ─── Form (used by AddSubtasksDialog) ──────────────────────────────────────── */
+.ttm-form {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+
+.ttm-form-label {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	font-size: var(--fs-sm);
+	font-weight: var(--fw-bold);
+	color: var(--text-1);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+.ttm-form-input {
+	padding: 9px 12px;
+	border: 1px solid var(--border-3);
+	border-radius: var(--r-md);
+	font-size: var(--fs-md);
+	font-family: var(--font-sans);
+	color: var(--text-1);
+	background: var(--surface);
+	transition:
+		border-color var(--t-base),
+		box-shadow var(--t-base);
+}
+.ttm-form-input:focus {
+	outline: none;
+	border-color: var(--brand-red);
+	box-shadow: 0 0 0 3px var(--brand-red-soft);
+}
+
+.ttm-form-error {
+	color: var(--brand-red);
+	font-size: var(--fs-base);
+	font-weight: var(--fw-medium);
+}
+
 /* ─── Reorder dialog ────────────────────────────────────────────────────────── */
 .ttm-dialog-reorder {
 	width: 480px;

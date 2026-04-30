@@ -178,6 +178,92 @@ function ResourcePicker({ allResources, addedIds, onSelect, onClose }) {
     );
 }
 
+function AddSubtasksDialog({ tasks, onSave, onClose }) {
+    const [taskId, setTaskId] = useState(tasks[0]?.task_id ?? '');
+    const [count, setCount] = useState(5);
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState('');
+
+    const submit = async (e) => {
+        e.preventDefault();
+        const id = parseInt(taskId, 10);
+        const n = parseInt(count, 10);
+        if (isNaN(id)) {
+            setError('Please select a task.');
+            return;
+        }
+        if (isNaN(n) || n < 1) {
+            setError('Count must be at least 1.');
+            return;
+        }
+        setSaving(true);
+        try {
+            await onSave(id, n);
+            onClose();
+        } catch (err) {
+            setError(err.message);
+            setSaving(false);
+        }
+    };
+
+    if (tasks.length === 0) {
+        return (
+            <div className="ttm-overlay" onClick={onClose}>
+                <div className="ttm-dialog" onClick={(e) => e.stopPropagation()}>
+                    <h3 className="ttm-dialog-title">Add Subtask Row(s)</h3>
+                    <p className="ttm-dialog-msg">No tasks exist yet. Add a task first.</p>
+                    <div className="ttm-dialog-actions">
+                        <button className="ttm-dlg-btn ttm-dlg-ghost" onClick={onClose}>Close</button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="ttm-overlay" onClick={onClose}>
+            <div className="ttm-dialog" onClick={(e) => e.stopPropagation()}>
+                <h3 className="ttm-dialog-title">Add Subtask Row(s)</h3>
+                <form className="ttm-form" onSubmit={submit}>
+                    <label className="ttm-form-label">
+                        Task
+                        <select
+                            className="ttm-form-input"
+                            value={taskId}
+                            onChange={(e) => setTaskId(e.target.value)}
+                            autoFocus
+                        >
+                            {tasks.map((t) => (
+                                <option key={t.task_id} value={t.task_id}>
+                                    {t.task_number ? `${t.task_number} — ` : ''}{t.task_name || `Task ${t.task_id}`}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <label className="ttm-form-label">
+                        Number of Subtasks
+                        <input
+                            className="ttm-form-input"
+                            type="number"
+                            min="1"
+                            max="500"
+                            value={count}
+                            onChange={(e) => setCount(e.target.value)}
+                        />
+                    </label>
+                    {error && <p className="ttm-form-error">{error}</p>}
+                    <div className="ttm-dialog-actions">
+                        <button type="button" className="ttm-dlg-btn ttm-dlg-ghost" onClick={onClose}>Cancel</button>
+                        <button type="submit" className="ttm-dlg-btn ttm-dlg-danger" disabled={saving}>
+                            {saving ? 'Adding…' : 'Add Subtasks'}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+}
+
 // ─── DataCell — rendered by react-window Grid ─────────────────────────────────
 // Reads hours from entriesRef (a Map) directly; version in cellProps triggers re-renders.
 const DataCell = memo(({ rowIndex, columnIndex, style, rows, resources, entriesRef, editingCell, commitLockRef, onStartEdit, onCommit, onCancel }) => {
@@ -260,6 +346,7 @@ const TTMGrid = forwardRef(function TTMGrid({ ttm_id }, ref) {
     const [pickerLoading, setPickLoad] = useState(false);
     const [reorderTarget, setReorder] = useState(null);
     const [confirm, setConfirm] = useState(null);
+    const [showAddSubtasks, setShowAddSubtasks] = useState(false);
     const [gridKey, setGridKey] = useState(0); // increment to remount Grid on structural changes
 
     // Chunk-based entry cache (no React state — avoids full re-renders on every keystroke)
@@ -383,6 +470,7 @@ const TTMGrid = forwardRef(function TTMGrid({ ttm_id }, ref) {
     // ── Imperative API for TopNav ─────────────────────────────────────────────────
     useImperativeHandle(ref, () => ({
         addTask: handleAddTask,
+        openAddSubtasks: () => setShowAddSubtasks(true),
         openResourcePicker: handleOpenPicker,
         openReorder: (type) => setReorder(type)
     }));
@@ -470,6 +558,29 @@ const TTMGrid = forwardRef(function TTMGrid({ ttm_id }, ref) {
             console.error('Add task failed:', err.message);
         }
     }, [ttm_id]);
+
+    // ── Add N subtasks to a task ──────────────────────────────────────────────────
+    // Throws on failure so the dialog can surface the error to the user.
+    const handleAddSubtasks = useCallback(
+        async (task_id, count) => {
+            const res = await fetch('/api/subtasks', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ task_id, count })
+            });
+            if (!res.ok) {
+                const msg = await res.json().catch(() => ({}));
+                throw new Error(msg.error || `HTTP ${res.status}`);
+            }
+            const { subtasks: newSubs } = await res.json();
+            // Row indices shift — chunk cache must be invalidated
+            invalidateCache();
+            setTasks((prev) =>
+                prev.map((t) => (t.task_id === task_id ? { ...t, subtasks: [...t.subtasks, ...newSubs] } : t))
+            );
+        },
+        [invalidateCache]
+    );
 
     // ── Add resource ──────────────────────────────────────────────────────────────
     const handleOpenPicker = useCallback(async () => {
@@ -732,6 +843,14 @@ const TTMGrid = forwardRef(function TTMGrid({ ttm_id }, ref) {
             )}
 
             {confirm && <ConfirmDialog message={confirm.message} onConfirm={confirm.onConfirm} onCancel={() => setConfirm(null)} />}
+
+            {showAddSubtasks && (
+                <AddSubtasksDialog
+                    tasks={tasks}
+                    onSave={handleAddSubtasks}
+                    onClose={() => setShowAddSubtasks(false)}
+                />
+            )}
 
             {reorderTarget === 'tasks' && (
                 <ReorderDialog

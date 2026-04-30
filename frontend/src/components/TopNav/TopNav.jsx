@@ -1,6 +1,6 @@
 import './TopNav.css';
 
-export default function TopNav({ currentTtm, onHome, onAddTask, onAddResource, onReorder }) {
+export default function TopNav({ currentTtm, onHome, onAddTask, onAddSubtasks, onAddResource, onReorder }) {
 	const viewing = currentTtm !== null;
 
 	return (
@@ -24,6 +24,9 @@ export default function TopNav({ currentTtm, onHome, onAddTask, onAddResource, o
 					</button>
 					<button className="topnav-btn topnav-btn-outline" onClick={onAddTask}>
 						+ Task
+					</button>
+					<button className="topnav-btn topnav-btn-outline" onClick={onAddSubtasks} title="Add subtask rows to a task">
+						+ Subtasks
 					</button>
 					<button className="topnav-btn topnav-btn-red" onClick={onAddResource}>
 						+ Resource

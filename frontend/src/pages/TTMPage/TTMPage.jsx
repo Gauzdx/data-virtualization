@@ -14,6 +14,7 @@ export default function TTMPage() {
 		setCurrentTtm({ ttm_id: ttmIdNum, ttm_name: ttmNameFromNav });
 		setTtmActions({
 			addTask: () => gridRef.current?.addTask(),
+			openAddSubtasks: () => gridRef.current?.openAddSubtasks(),
 			openResourcePicker: () => gridRef.current?.openResourcePicker(),
 			openReorder: (type) => gridRef.current?.openReorder(type)
 		});

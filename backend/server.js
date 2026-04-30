@@ -388,6 +388,52 @@ app.delete('/api/tasks/:task_id', async (req, res) => {
 	}
 });
 
+// ─── POST /api/subtasks ───────────────────────────────────────────────────────
+// Adds N empty subtask rows to an existing task.
+// Body: { task_id, count }
+app.post('/api/subtasks', async (req, res) => {
+	const task_id = parseInt(req.body.task_id, 10);
+	const count = parseInt(req.body.count, 10);
+	if (isNaN(task_id)) return res.status(400).json({ error: 'task_id required' });
+	if (isNaN(count) || count < 1 || count > 500) return res.status(400).json({ error: 'count must be between 1 and 500' });
+
+	const client = await pool.connect();
+	try {
+		await client.query('BEGIN');
+		const taskRes = await client.query('SELECT ttm_id, task_number FROM tasks WHERE task_id = $1', [task_id]);
+		if (taskRes.rows.length === 0) {
+			await client.query('ROLLBACK');
+			return res.status(404).json({ error: 'Task not found' });
+		}
+		const { ttm_id, task_number } = taskRes.rows[0];
+		const aggRes = await client.query(
+			'SELECT COALESCE(MAX(subtask_order), 0) AS max_order, COUNT(*) AS cnt FROM subtasks WHERE task_id = $1',
+			[task_id]
+		);
+		const startOrder = parseInt(aggRes.rows[0].max_order, 10);
+		const startSuffix = parseInt(aggRes.rows[0].cnt, 10) + 1;
+
+		const subtasks = [];
+		for (let i = 0; i < count; i++) {
+			const order = startOrder + i + 1;
+			const subNum = `${task_number}.${startSuffix + i}`;
+			const subRes = await client.query(
+				'INSERT INTO subtasks (ttm_id, task_id, subtask_number, subtask_name, subtask_order) VALUES ($1,$2,$3,$4,$5) RETURNING *',
+				[ttm_id, task_id, subNum, '', order]
+			);
+			subtasks.push(subRes.rows[0]);
+		}
+		await client.query('COMMIT');
+		res.json({ task_id, subtasks });
+	} catch (err) {
+		await client.query('ROLLBACK');
+		console.error('[subtasks post]', err.message);
+		res.status(500).json({ error: err.message });
+	} finally {
+		client.release();
+	}
+});
+
 // ─── DELETE /api/subtasks/:subtask_id ─────────────────────────────────────────
 app.delete('/api/subtasks/:subtask_id', async (req, res) => {
 	const subtask_id = parseInt(req.params.subtask_id, 10);

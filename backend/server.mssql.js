@@ -488,6 +488,61 @@ app.delete('/api/tasks/:task_id', async (req, res) => {
 	}
 });
 
+// ─── POST /api/subtasks ───────────────────────────────────────────────────────
+// Adds N empty subtask rows to an existing task.
+// Body: { task_id, count }
+app.post('/api/subtasks', async (req, res) => {
+	const task_id = parseInt(req.body.task_id, 10);
+	const count = parseInt(req.body.count, 10);
+	if (isNaN(task_id)) return res.status(400).json({ error: 'task_id required' });
+	if (isNaN(count) || count < 1 || count > 500) return res.status(400).json({ error: 'count must be between 1 and 500' });
+
+	const pool = await getPool();
+	const transaction = new sql.Transaction(pool);
+	try {
+		await transaction.begin();
+
+		const taskRes = await new sql.Request(transaction)
+			.input('task_id', sql.Int, task_id)
+			.query('SELECT ttm_id, task_number FROM tasks WHERE task_id = @task_id');
+		if (taskRes.recordset.length === 0) {
+			await transaction.rollback();
+			return res.status(404).json({ error: 'Task not found' });
+		}
+		const { ttm_id, task_number } = taskRes.recordset[0];
+
+		const aggRes = await new sql.Request(transaction)
+			.input('task_id', sql.Int, task_id)
+			.query('SELECT ISNULL(MAX(subtask_order), 0) AS max_order, COUNT(*) AS cnt FROM subtasks WHERE task_id = @task_id');
+		const startOrder = aggRes.recordset[0].max_order;
+		const startSuffix = aggRes.recordset[0].cnt + 1;
+
+		const subtasks = [];
+		for (let i = 0; i < count; i++) {
+			const order = startOrder + i + 1;
+			const subNum = `${task_number}.${startSuffix + i}`;
+			const subRes = await new sql.Request(transaction)
+				.input('ttm_id', sql.Int, ttm_id)
+				.input('task_id', sql.Int, task_id)
+				.input('subtask_number', sql.NVarChar(50), subNum)
+				.input('subtask_name', sql.NVarChar(255), '')
+				.input('subtask_order', sql.Int, order).query(`
+					INSERT INTO subtasks (ttm_id, task_id, subtask_number, subtask_name, subtask_order)
+					OUTPUT INSERTED.*
+					VALUES (@ttm_id, @task_id, @subtask_number, @subtask_name, @subtask_order)
+				`);
+			subtasks.push(subRes.recordset[0]);
+		}
+
+		await transaction.commit();
+		res.json({ task_id, subtasks });
+	} catch (err) {
+		await transaction.rollback();
+		console.error('[subtasks post]', err.message);
+		res.status(500).json({ error: err.message });
+	}
+});
+
 // ─── DELETE /api/subtasks/:subtask_id ─────────────────────────────────────────
 app.delete('/api/subtasks/:subtask_id', async (req, res) => {
 	const subtask_id = parseInt(req.params.subtask_id, 10);
