@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(npm install *)",
-      "Bash(npx vite *)"
+      "Bash(npx vite *)",
+      "Bash(mkdir -p /home/gkumar/Documents/Work/data-virtualization/frontend/src/pages/TtmHomePage)",
+      "Bash(mv /home/gkumar/Documents/Work/data-virtualization/frontend/src/pages/HomePage/HomePage.jsx /home/gkumar/Documents/Work/data-virtualization/frontend/src/pages/TtmHomePage/TtmHomePage.jsx)",
+      "Bash(mv /home/gkumar/Documents/Work/data-virtualization/frontend/src/pages/HomePage/HomePage.css /home/gkumar/Documents/Work/data-virtualization/frontend/src/pages/TtmHomePage/TtmHomePage.css)",
+      "Bash(rmdir /home/gkumar/Documents/Work/data-virtualization/frontend/src/pages/HomePage)"
     ]
   }
 }

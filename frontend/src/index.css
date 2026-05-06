@@ -57,10 +57,10 @@
 	--fw-black: 900;
 
 	/* Radius */
-	--r-sm: 3px;
-	--r-md: 5px;
-	--r-lg: 8px;
-	--r-xl: 10px;
+	--r-sm: 0;
+	--r-md: 0;
+	--r-lg: 0;
+	--r-xl: 0;
 
 	/* Layout */
 	--row-h: 36px;
@@ -118,7 +118,6 @@ body {
 }
 ::-webkit-scrollbar-thumb {
 	background: #999;
-	border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
 	background: #666;

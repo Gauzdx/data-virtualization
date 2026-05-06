@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { Routes, Route, Outlet, useNavigate } from 'react-router-dom';
 import TopNav from './components/TopNav/TopNav';
 import HomePage from './pages/HomePage/HomePage';
+import TtmHomePage from './pages/TtmHomePage/TtmHomePage';
 import TTMPage from './pages/TTMPage/TTMPage';
 import './App.css';
 
@@ -38,6 +39,7 @@ export default function App() {
 		<Routes>
 			<Route element={<AppLayout />}>
 				<Route path="/" element={<HomePage />} />
+				<Route path="/ttm" element={<TtmHomePage />} />
 				<Route path="/ttm/:ttm_id" element={<TTMPage />} />
 			</Route>
 		</Routes>
