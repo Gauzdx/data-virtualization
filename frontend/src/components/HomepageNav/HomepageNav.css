@@ -1,0 +1,30 @@
+.hpn {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	padding: 0 24px;
+	height: 52px;
+	background: var(--surface-dark);
+	flex-shrink: 0;
+	z-index: var(--z-nav);
+	border-bottom: 3px solid var(--brand-red);
+}
+
+.hpn-brand {
+	font-size: var(--fs-3xl);
+	font-weight: var(--fw-black);
+	letter-spacing: -0.03em;
+	color: var(--text-on-dark);
+	text-transform: uppercase;
+}
+
+.hpn-spacer {
+	flex: 1;
+}
+
+.hpn-tagline {
+	color: var(--text-on-dark-3);
+	font-size: var(--fs-sm);
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}
